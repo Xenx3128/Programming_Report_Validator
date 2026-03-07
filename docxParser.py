@@ -14,10 +14,12 @@ from docx.oxml.table import CT_Tbl
 from docx.oxml.text.paragraph import CT_P
 from docx.table import Table, _Cell
 from docx.text.paragraph import Paragraph
+from docx.comments import Comment
 from io import StringIO
 import re
 
 from default_settings import *
+from constants import *
 import inspect
 
 
@@ -99,67 +101,6 @@ class MarginsChecklist(BaseChecklist):
         self.orientation = None
 
 
-regex_transform = {
-    "Таблица <N> - <Название>.": "^Таблица [1-9]*(.[1-9])* (–|-) .*$",
-    "<Название>.": ".*",
-    "Рисунок <N> - <Название>.": "^Рисунок [1-9]*(.[1-9])* (–|-) .*$"
-}
-
-param_to_comment = {
-    "format_regex": "Формат",
-    "font_name": "Тип шрифта",
-    "font_size": "Размер шрифта",
-    "font_bald": "Полужирный",
-    "font_italic": "Курсив",
-    "font_underline": "Подчёркивание",
-    "font_color": "Цвет текста",
-    "font_back_color": "Цвет подчёркивания",
-    "alignment": "Выравнивание",
-    "vert_alignment": "Выравнивание по вертикали",
-    "keep_with_next": "Не отрывать от следующего",
-    "page_break_before": "С новой страницы",
-    "space_before": "Верт отступ перед абзацем",
-    "space_after": "Верт отступ после абзаца",
-    "left_indent": "Отступ слева",
-    "right_indent": "Отступ справа",
-    "first_line_indent": "Отступ первой строки",
-    "line_spacing": "Межстрочный интервал",
-    "is_list": "Список",
-    "top_margin": "Верхнее поле",
-    "bottom_margin": "Нижнее поле",
-    "left_margin": "Левое поле",
-    "right_margin": "Правое поле",
-    "orientation": "Ориентация",
-}
-var_to_comment = {
-    True: "Да",
-    False: "Нет",
-    None: "Нет",
-}
-alignment_to_comment = {
-    WD_PARAGRAPH_ALIGNMENT.LEFT: "Левый край",
-    WD_PARAGRAPH_ALIGNMENT.CENTER: "По центру",
-    WD_PARAGRAPH_ALIGNMENT.RIGHT: "Правый край",
-    WD_PARAGRAPH_ALIGNMENT.JUSTIFY: "По ширине",
-}
-vert_alignment_to_comment = {
-    WD_ALIGN_VERTICAL.TOP: "Верхний край",
-    WD_ALIGN_VERTICAL.CENTER: "По центру",
-    WD_ALIGN_VERTICAL.BOTTOM: "Нижний край",
-    WD_ALIGN_VERTICAL.BOTH: "Ребята, не стоит вскрывать эту тему...",
-}
-orientation_to_comment = {
-    WD_ORIENTATION.PORTRAIT: "Книжная",
-    WD_ORIENTATION.LANDSCAPE: "Альбомная"
-}
-
-modifications = {
-    "paragraph_after_table": {
-        "space_before": 13.0
-    }
-}
-
-
 class DocumentParser:
     def __init__(self):
         self.text_checklist = ParagraphChecklist()
@@ -187,6 +128,9 @@ class DocumentParser:
             "enable_pic_title": True,
             "list_reminder": True,
         }
+
+        
+        self.doc_comments = {}
 
     def set_enable_optional_settings(self, elements: dict):
         if elements is not None:
@@ -229,57 +173,69 @@ class DocumentParser:
     def is_list(paragraph):
         return len(paragraph._element.xpath('./w:pPr/w:numPr')) > 0
 
+    
     @staticmethod
     def get_error_comment(checklist, received: dict):
         attributes = inspect.getmembers(checklist, lambda a: not (inspect.isroutine(a)))
         expected = {a[0]: a[1] for a in attributes if not (a[0].startswith('__') and a[0].endswith('__'))}
-        comments = set()
+        comments = []
+        
         for key, val in expected.items():
             comparison_res = True
-            comment = ""
+            comment = []
             if key in received.keys() and val is not None:
                 # Отдельная обработка формата через RegEx
                 if key == 'format_regex':
-                    comparison_res = re.fullmatch(fr'{regex_transform[val]}', received[key])
+                    comparison_res = re.fullmatch(fr'{REGEX_TRANSFORM[val]}', received[key])
                     if not comparison_res:
-                        comment += f"{param_to_comment[key]}: "
-                        comment += f"{val}; "
-                        comment += f"Получено: {received[key]}.\n"
-                        comments.add(comment)
+                        comment = [PARAM_TO_COMMENT[key], val, received[key]]
+                        comments.append(comment)
                         continue
                 elif "list_level" in received.keys() and key == "left_indent":
                     expected_indent = expected["left_indent_base"] + expected["left_indent_mod"] * received["list_level"]
                     if received["left_indent"] != expected_indent:
-                        comment += f"{param_to_comment[key]}: "
-                        comment += f"Ожидалось: {expected_indent}; "
-                        comment += f"Получено: {received[key]}.\n"
-                        comments.add(comment)
+                        comment = [PARAM_TO_COMMENT[key], expected_indent, received[key]]
+                        comments.append(comment)
                         continue
                 else:
                     comparison_res = val == received[key]
                 if not comparison_res:
-                    comment += f"{param_to_comment[key]}: "
+                    comment = [PARAM_TO_COMMENT[key]]
                     # У выравниваний значения приравниваются к 0..3, поэтому нужен костыль
                     if key == "alignment":
-                        comment += f"Ожидалось: {alignment_to_comment[val]}; "
-                        comment += f"Получено: {alignment_to_comment[received[key]]}.\n"
+                        comment += [ALIGNMENT_TO_COMMENT[val], ALIGNMENT_TO_COMMENT[received[key]]]
                     elif key == "vert_alignment":
-                        comment += f"Ожидалось: {vert_alignment_to_comment[val]}; "
-                        comment += f"Получено: {vert_alignment_to_comment[received[key]]}.\n"
+                        comment += [VERT_ALIGNMENT_TO_COMMENT[val], VERT_ALIGNMENT_TO_COMMENT[received[key]]]
                     elif key == "orientation":
-                        comment += f"Ожидалось: {orientation_to_comment[val]}; "
-                        comment += f"Получено: {orientation_to_comment[received[key]]}.\n"
+                        comment += [ORIENTATION_TO_COMMENT[val], ORIENTATION_TO_COMMENT[received[key]]]
                     else:
                         if val is None or isinstance(val, bool):
-                            comment += f"Ожидалось: {var_to_comment[val]}; "
+                            comment += [VAR_TO_COMMENT[val]]
                         else:
-                            comment += f"Ожидалось: {val}; "
-                        if received[key] is None or isinstance(received[key], bool):
-                            comment += f"Получено: {var_to_comment[received[key]]}.\n"
+                            comment += [val]
+                        if received is None or isinstance(received[key], bool):
+                            comment += [VAR_TO_COMMENT[received[key]]]
                         else:
-                            comment += f"Получено: {received[key]}.\n"
-                    comments.add(comment)
+                            comment += [received[key]]
+                    comments.append(comment)
         return comments
+    
+    @staticmethod
+    def create_comment(document, runs, element, comments: list):
+        if len(comments) > 0:
+            comment = document.add_comment(
+                runs=runs,
+                text='',
+                author=element
+            )
+            for cmt in comments:
+                parameter, expected_value, received_value = cmt
+                cmt_para = comment.add_paragraph()
+                cmt_para.add_run(f"{parameter}: ").bold = True 
+                cmt_para.add_run(f"{received_value} | ")
+                cmt_para.add_run(f"({expected_value}).\n")
+            return comment
+
 
     def get_run_properties(self, document, p, run):
         """ Параметры параграфа """
@@ -427,187 +383,308 @@ class DocumentParser:
             section_comments = self.get_error_comment(stats_to_compare, paragraph_stats)
             if len(section_comments) > 0:
                 margins_comments[f"Раздел {section_cnt + 1}:"] = section_comments
-        return margins_comments
+        return margins_comments     
 
+
+
+    # ====================== НОВЫЕ ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ======================
+    @staticmethod
+    def get_heading_level(paragraph):
+        """Возвращает уровень заголовка (1-9) или None. Покрывает ВСЕ крайние случаи."""
+        def extract_level_from_style(style):
+            if not style:
+                return None
+            name = style.name or ""
+            if name.startswith("Heading "):
+                try:
+                    return int(name.split()[-1])
+                except (ValueError, IndexError):
+                    pass
+            style_id = getattr(style, 'style_id', None) or ""
+            if style_id.startswith("Heading"):
+                try:
+                    return int(style_id.replace("Heading", "").strip())
+                except ValueError:
+                    pass
+            if name.startswith("Heading") and len(name) > 7:
+                try:
+                    return int(name[7:])
+                except ValueError:
+                    pass
+            return None
+
+        # Быстрый путь
+        level = extract_level_from_style(paragraph.style)
+        if level is not None:
+            return level
+
+        # Цепочка наследования стилей (самый частый крайний случай!)
+        current = paragraph.style
+        depth = 0
+        while current and depth < 20:
+            level = extract_level_from_style(current)
+            if level is not None:
+                return level
+            current = current.base_style
+            depth += 1
+
+        # outlineLvl (используется в некоторых шаблонах и экспортах из Google Docs)
+        outline = paragraph._p.xpath('./w:pPr/w:outlineLvl/@w:val')
+        if outline:
+            try:
+                lvl = int(outline[0])
+                return lvl if 1 <= lvl <= 9 else None
+            except (ValueError, IndexError):
+                pass
+        return None
+
+    @staticmethod
+    def is_list_item(paragraph):
+        """Возвращает (is_list: bool, level: int). Работает даже если numPr отсутствует."""
+        if not isinstance(paragraph, Paragraph):
+            return False, 0
+
+        # Самый надёжный способ — XML
+        pPr = paragraph._p.pPr
+        if pPr is not None and pPr.numPr is not None:
+            ilvl = paragraph._p.xpath('.//w:ilvl/@w:val')
+            level = int(ilvl[0]) + 1 if ilvl else 1
+            return True, level
+
+        # Стиль List / List Paragraph / пользовательские списки
+        style_name = (paragraph.style.name or "").lower()
+        if any(x in style_name for x in ("list", "нумерованный", "маркированный", "bullet", "number")):
+            return True, 1
+
+        return False, 0
+
+    @staticmethod
+    def has_image(paragraph):
+        """Проверка наличия изображения (pic + drawing — покрывает все версии Word)"""
+        for run in paragraph.runs:
+            xml = str(run.element.xml).lower()
+            if 'pic:pic' in xml:
+                return True
+        return False
+    
+    @staticmethod
+    def has_image_run(run):
+        """Проверяет, содержит ли именно этот run изображение"""
+        if not run:
+            return False
+        xml = str(run.element.xml).lower()
+        return 'pic:pic' in xml
+
+    def collect_paragraph_errors(self, paragraph, checklist, document):
+        """Проверяет КАЖДЫЙ run в параграфе и собирает ВСЕ ошибки.
+        Возвращает список ошибок для одного общего комментария (дубликаты по параметру удаляются)."""
+        if not isinstance(paragraph, Paragraph) or not paragraph.runs:
+            return []
+
+        all_errors = []
+        seen = set()
+
+        for run in paragraph.runs:
+            # Пропускаем пустые run-ы (часто бывают пробелы/табуляция)
+            if not run.text or not run.text.strip():
+                continue
+
+            stats = self.get_run_properties(document, paragraph, run)
+            errors = self.get_error_comment(checklist, stats)
+
+            for err in errors:
+                err_key = tuple(str(x) for x in err)  # дедупликация
+                if err_key not in seen:
+                    seen.add(err_key)
+                    all_errors.append(err)
+
+        return all_errors
+
+    def _classify_paragraph(self, paragraph):
+        """Единая функция классификации — покрывает абсолютно все случаи."""
+        if not isinstance(paragraph, Paragraph):
+            return "unknown", None
+
+        heading_level = self.get_heading_level(paragraph)
+        is_list, list_level = self.is_list_item(paragraph)
+        has_img = self.has_image(paragraph)
+
+        if heading_level == 1:
+            return "heading1", None
+        if heading_level == 2:
+            return "heading2", None
+        if heading_level == 3:
+            return "heading3", None
+        if heading_level is not None:           # заголовки 4+ уровня
+            return f"heading{heading_level}", None
+
+        if is_list:
+            return "list", list_level
+
+        if has_img:
+            return "image", None
+
+        # Название рисунка/таблицы (стили Caption + наши настройки)
+        style_name = (paragraph.style.name or "").lower()
+        if "caption" in style_name or "подпись" in style_name:
+            return "caption", None
+
+        return "text", None
+
+    # =========================================================================
+    
     def parse_document(self, filename):
         document = Document(filename)
-        comment_count = 0
         written_comments = []
-        paragraph_to_comment = ""
-        comment_to_send = set()
-        comment_type = "System"
+        comment_count = 0
+
+        # Состояния
         image_name_check = 0
         text_after_table_check = 0
         first_paragraph_not_reached = True
-        table_name_not_found = False
-        list_start = False
-        paragraphs = document.paragraphs
+
+        # Накопители для комментария
+        current_paragraph = None
+        current_errors = []
+        current_author = "System"
+        current_target_runs = []
+
         for block in self.iter_block_items(document):
-            next_paragraph_to_comment = ""
-            next_comment_to_send = set()
-            next_comment_type = "System"
-            lock_comment_name = False
-            stats_to_compare = {}
-            run_comments = set()
-            if 'text' in str(block):
-                if self.is_list(block):
-                    if not list_start:
-                        # print(block.text)
-                        list_start = True
-                        block.add_comment(''.join(self.list_checklist.list_reminder),
-                                          author="Напоминание о формате списков")
-                        written_comments.append(self.list_checklist.list_reminder)
-                elif block.text != "":
-                    list_start = False
+            block_errors = []
+            block_author = "System"
+            target_paragraph = None
+            target_runs = []
 
-                if first_paragraph_not_reached:
-                    first_paragraph_not_reached = False
-                    margin_comments = self.parse_margins(document)
-                    for section, comments in margin_comments.items():
-                        block.add_comment(''.join(comments), author=section)
-                        written_comments.append(comments)
-                for run in block.runs:
-                    xmlstr = str(run.element.xml)
-                    my_namespaces = dict([node for _, node in ET.iterparse(StringIO(xmlstr), events=['start-ns'])])
-                    root = ET.fromstring(xmlstr)
-                    if 'pic:pic' in xmlstr:  # Image run
-                        for pic in root.findall('.//pic:pic', my_namespaces):
-                            stats_to_compare = self.image_checklist
-                            image_name_check = 2
-                            paragraph_stats = self.get_run_properties(document, block, run)
-                            run_comments = self.get_error_comment(stats_to_compare, paragraph_stats)
-                            for comment in run_comments:
-                                next_comment_to_send.add(comment)
-                            next_comment_type = self.set_comment_name("Рисунок", next_comment_type, lock_comment_name)
-                            lock_comment_name = True
-                            next_paragraph_to_comment = block
-                            # print("Image:", block)
-                    else:  # Paragraph run
-                        if run.text.strip() != "":
+            # Проверка полей документа (один раз в начале)
+            if first_paragraph_not_reached and isinstance(block, Paragraph):
+                first_paragraph_not_reached = False
+                margin_comments = self.parse_margins(document)
+                for section_title, errors in margin_comments.items():
+                    if errors:
+                        self.create_comment(document, block.runs, section_title, errors)
+                        comment_count += 1
+                        written_comments.append([section_title, errors])
 
-                            paragraph_stats = self.get_run_properties(document, block, run)
-                            if block.style.name.startswith("Heading 1"):
-                                paragraph_stats["is_list"] = self.is_list(block)
-                                stats_to_compare = self.heading1_checklist
-                                next_comment_type = self.set_comment_name("Заголовок 1", next_comment_type,
-                                                                          lock_comment_name)
-                            elif block.style.name.startswith("Heading 2"):
-                                paragraph_stats["is_list"] = self.is_list(block)
-                                stats_to_compare = self.heading2_checklist
-                                next_comment_type = self.set_comment_name("Заголовок 2", next_comment_type,
-                                                                          lock_comment_name)
-                            elif block.style.name.startswith("Heading 3"):
-                                paragraph_stats["is_list"] = self.is_list(block)
-                                stats_to_compare = self.heading3_checklist
-                                next_comment_type = self.set_comment_name("Заголовок 3", next_comment_type,
-                                                                          lock_comment_name)
-                            elif self.is_list(block):
-                                stats_to_compare = self.list_checklist
-                                if block.list_info[0]:
-                                    paragraph_stats["list_level"] = block.list_info[2]
-                                else:
-                                    paragraph_stats["list_level"] = 0
+            # ====================== ПАРАГРАФ ======================
+            if isinstance(block, Paragraph):
+                p = block
+                target_paragraph = p
+                block_type, extra = self._classify_paragraph(p)
+                
+                if len(p.runs) == 0:
+                    continue
 
-                                next_comment_type = self.set_comment_name("Элемент списка", next_comment_type,
-                                                                          lock_comment_name)
+                # Определяем чек-лист и автора
+                if block_type.startswith("heading"):
+                    level = int(block_type.replace("heading", ""))
+                    checklist = getattr(self, f"heading{level}_checklist", self.heading3_checklist)
+                    block_author = f"Заголовок {level}"
 
-                            elif self.enable_optional_settings["enable_pic_title"] and image_name_check:
-                                stats_to_compare = self.image_name_checklist
-                                paragraph_stats["format_regex"] = block.text
-                                next_comment_type = self.set_comment_name("Название рисунка", next_comment_type,
-                                                                          lock_comment_name)
-                                lock_comment_name = True
-                            elif self.enable_optional_settings["paragraph_after_table"] and text_after_table_check:
-                                stats_to_compare = self.text_after_table_checklist
-                                next_comment_type = self.set_comment_name("Параграф после таблицы", next_comment_type,
-                                                                          lock_comment_name)
-                                lock_comment_name = True
-                            else:
-                                stats_to_compare = self.text_checklist
-                                next_comment_type = self.set_comment_name("Абзац", next_comment_type, lock_comment_name)
-                            if paragraph_stats["first_line_indent"] < 0:
-                                paragraph_stats["left_indent"] += paragraph_stats["first_line_indent"]
-                            run_comments = self.get_error_comment(stats_to_compare, paragraph_stats)
-                            for comment in run_comments:
-                                next_comment_to_send.add(comment)
-                            next_paragraph_to_comment = block
-            elif 'table' in str(block):  # Table
-                text_after_table_check = 2
-                """Перепроверка названия таблица"""
-                if self.enable_optional_settings["table_title"]:
-                    if isinstance(paragraph_to_comment, Paragraph):
-                        comment_to_send.clear()
-                        stats_to_compare = self.table_name_checklist
-                        paragraph_stats["format_regex"] = paragraph_to_comment.text
-                        run_comments = self.get_error_comment(stats_to_compare, paragraph_stats)
-                        # print(run_comments)
-                        for comment in run_comments:
-                            comment_to_send.add(comment)
-                        comment_type = "Название таблицы"
-                    else:
-                        next_comment_to_send.add("Нет названия таблицы!\n")
+                elif block_type == "list":
+                    checklist = self.list_checklist
+                    block_author = "Элемент списка"
 
-                # print("Table:", block)
-                paragraph_chosen = False
-                for row_count, row in enumerate(block.rows):
-                    col_count = 0
-                    for cell in row.cells:
-                        if cell.text != "":
-                            for par in cell.paragraphs:
-                                if not paragraph_chosen:
-                                    next_paragraph_to_comment = par
-                                    paragraph_chosen = True
-                                for run in par.runs:
-                                    paragraph_stats = self.get_run_properties(document, par, run)
-                                    vert_alignment = cell.vertical_alignment if cell.vertical_alignment else \
-                                        WD_ALIGN_VERTICAL.TOP
-                                    paragraph_stats['vert_alignment'] = vert_alignment
-                                    if self.enable_optional_settings["table_headings_top"] and row_count == 0:
-                                        stats_to_compare = self.table_headings_checklist
-                                    elif self.enable_optional_settings["table_headings_left"] and col_count == 0:
-                                        stats_to_compare = self.table_headings_checklist
-                                    else:
-                                        stats_to_compare = self.table_text_checklist
+                elif self.has_image(p):                                      # ← РИСУНОК
+                    checklist = self.image_checklist
+                    block_author = "Рисунок"
+                    image_name_check = 2
 
-                                    run_comments = self.get_error_comment(stats_to_compare, paragraph_stats)
-                                    for comment in run_comments:
-                                        next_comment_to_send.add(comment)
-                                    next_comment_type = self.set_comment_name("Таблица", next_comment_type,
-                                                                              lock_comment_name)
-                        col_count += 1
+                    # Привязываем комментарий именно к run-у с картинкой
+                    image_run = next((r for r in p.runs if self.has_image_run(r)), None)
+                    target_runs = [image_run] if image_run else p.runs
 
-            if isinstance(paragraph_to_comment, Paragraph) and len(comment_to_send) > 0:
-                paragraph_to_comment.add_comment(''.join(comment_to_send), author=comment_type)
-                comment_count += 1
-                written_comments.append(comment_to_send)
+                elif image_name_check > 0 or block_type == "caption":        # ← НАЗВАНИЕ РИСУНКА
+                    checklist = self.image_name_checklist
+                    block_author = "Название рисунка"
+                    stats = {"format_regex": p.text.strip()}
+                    block_errors.extend(self.get_error_comment(checklist, stats))
+                    target_runs = p.runs
 
-            paragraph_to_comment = next_paragraph_to_comment
-            comment_to_send = next_comment_to_send
-            comment_type = next_comment_type
-
-            image_name_check -= 1 if image_name_check > 0 else 0
-            text_after_table_check -= 1 if text_after_table_check > 0 else 0
-
-        if isinstance(paragraph_to_comment, Paragraph) and len(comment_to_send) > 0:
-            paragraph_to_comment.add_comment(''.join(comment_to_send), author=comment_type)
-            comment_count += 1
-            written_comments.append(comment_to_send)
-
-        basename, extension = os.path.splitext(os.path.basename(filename))
-        try:
-            Path('./Results').mkdir(parents=True, exist_ok=False)
-        except FileExistsError:
-            pass
-        count = 0
-        while True:
-            try:
-                if count == 0:
-                    document.save(f"Results/{basename}_Проверенный{extension}")
+                elif self.enable_optional_settings.get("paragraph_after_table", False) and text_after_table_check > 0:
+                    checklist = self.text_after_table_checklist
+                    block_author = "Параграф после таблицы"
                 else:
-                    document.save(f"Results/{basename}_Проверенный_{count}{extension}")
-                break
-            except PermissionError:
-                count += 1
+                    checklist = self.text_checklist
+                    block_author = "Абзац"
+
+                # Главная проверка — все run-ы
+                if 'checklist' in locals() and not block_errors:   # для caption уже заполнили
+                    block_errors = self.collect_paragraph_errors(p, checklist, document)
+
+                # По умолчанию комментируем весь параграф
+                if not target_runs:
+                    target_runs = p.runs
+
+            # ====================== ТАБЛИЦА ======================
+            elif isinstance(block, Table):
+                text_after_table_check = 2
+                block_author = "Таблица"
+
+                # Проверка названия таблицы
+                if self.enable_optional_settings.get("table_title", True) and current_paragraph:
+                    stats = {"format_regex": current_paragraph.text.strip()}
+                    name_errors = self.get_error_comment(self.table_name_checklist, stats)
+                    if name_errors:
+                        current_errors.extend(name_errors)
+                        current_author = "Название таблицы"
+
+                # Проверка содержимого ячеек
+                for r_idx, row in enumerate(block.rows):
+                    for c_idx, cell in enumerate(row.cells):
+                        if not cell.text.strip():
+                            continue
+                        for cell_p in cell.paragraphs:
+                            if target_paragraph is None:
+                                target_paragraph = cell_p
+                                target_runs = cell_p.runs[:1] if cell_p.runs else []
+
+                            cell_stats = self.get_run_properties(document, cell_p,
+                                                                 cell_p.runs[0] if cell_p.runs else None)
+                            cell_stats["vert_alignment"] = cell.vertical_alignment or WD_ALIGN_VERTICAL.TOP
+
+                            checklist = self.table_headings_checklist if \
+                                (self.enable_optional_settings.get("table_headings_top", True) and r_idx == 0) or \
+                                (self.enable_optional_settings.get("table_headings_left", False) and c_idx == 0) \
+                                else self.table_text_checklist
+
+                            cell_errors = self.get_error_comment(checklist, cell_stats)
+                            if cell_errors:
+                                block_errors.extend(cell_errors)
+
+            # ====================== СОХРАНЕНИЕ КОММЕНТАРИЯ ======================
+            if current_paragraph and current_errors:
+                runs_to_use = current_target_runs if current_target_runs else current_paragraph.runs
+                self.create_comment(document, runs_to_use, current_author, current_errors)
+                comment_count += 1
+                written_comments.append([current_author, current_errors])
+
+            # Переключаемся на следующий блок
+            current_paragraph = target_paragraph
+            current_errors = block_errors
+            current_author = block_author
+            current_target_runs = target_runs
+
+            image_name_check = max(0, image_name_check - 1)
+            text_after_table_check = max(0, text_after_table_check - 1)
+
+        # Последний блок документа
+        if current_paragraph and current_errors:
+            runs_to_use = current_target_runs if current_target_runs else current_paragraph.runs
+            self.create_comment(document, runs_to_use, current_author, current_errors)
+            comment_count += 1
+            written_comments.append([current_author, current_errors])
+
+        # Сохранение результата
+        basename = os.path.splitext(os.path.basename(filename))[0]
+        out_path = f"Results/{basename}_Проверенный.docx"
+        count = 1
+        while os.path.exists(out_path):
+            out_path = f"Results/{basename}_Проверенный_{count}.docx"
+            count += 1
+
+        os.makedirs("Results", exist_ok=True)
+        document.save(out_path)
+
         return written_comments
 
 
