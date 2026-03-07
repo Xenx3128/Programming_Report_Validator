@@ -233,7 +233,7 @@ class DocumentParser:
                 cmt_para = comment.add_paragraph()
                 cmt_para.add_run(f"{parameter}: ").bold = True 
                 cmt_para.add_run(f"{received_value} | ")
-                cmt_para.add_run(f"({expected_value}).\n")
+                cmt_para.add_run(f"({expected_value}).")
             return comment
 
 
@@ -684,7 +684,6 @@ class DocumentParser:
 
         os.makedirs("Results", exist_ok=True)
         document.save(out_path)
-
         return written_comments
 
 
