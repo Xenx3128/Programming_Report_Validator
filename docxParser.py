@@ -18,6 +18,11 @@ from docx.comments import Comment
 from io import StringIO
 import re
 
+from docx.oxml.ns import qn
+from docx.shared import Pt, RGBColor
+from docx.enum.text import WD_UNDERLINE
+from docx.text.run import Run
+
 from default_settings import *
 from constants import *
 import inspect
@@ -42,7 +47,7 @@ class ParagraphChecklist(BaseChecklist):
         self.font_italic = None
         self.font_underline = None
         self.font_color = None  # !!!
-        self.font_back_color = None  # !!!
+        self.font_highlight = None  # !!!
         self.alignment = None
         self.keep_with_next = None
         self.page_break_before = None
@@ -52,6 +57,8 @@ class ParagraphChecklist(BaseChecklist):
         self.right_indent = None
         self.first_line_indent = None
         self.line_spacing = None
+        self.header_numbering = None
+
 
 
 class ListChecklist(ParagraphChecklist):
@@ -169,10 +176,6 @@ class DocumentParser:
         if isinstance(pic_name_check, dict):
             self.image_name_checklist.set_settings(pic_name_check)
 
-    @staticmethod
-    def is_list(paragraph):
-        return len(paragraph._element.xpath('./w:pPr/w:numPr')) > 0
-
     
     @staticmethod
     def get_error_comment(checklist, received: dict):
@@ -228,6 +231,9 @@ class DocumentParser:
                 text='',
                 author=element
             )
+            if element == 'Таблица':
+                cmt_para = comment.add_paragraph()
+                cmt_para.add_run("Выведена только первая ошибка в каждой категории\n").bold = True 
             for cmt in comments:
                 parameter, expected_value, received_value = cmt
                 cmt_para = comment.add_paragraph()
@@ -237,97 +243,161 @@ class DocumentParser:
             return comment
 
 
-    def get_run_properties(self, document, p, run):
-        """ Параметры параграфа """
-        st = p.style
-        formatting = p.paragraph_format  # Формат параграфа
-        st_formatting = p.style.paragraph_format  # Формат параграфа, заданный стилем
-        default = st.base_style if st.base_style else document.styles["Normal"]  # Стиль по умолчанию
-        def_formatting = default.paragraph_format
 
-        # Пришлось всему написать is not None, т.к может встретиться 0
-        # Название шрифта
-        font_name = run.font.name if run.font.name is not None else \
-            st.font.name if st.font.name is not None else \
-                default.font.name if default.font.name is not None else "Calibri"
-        # Размер шрифта
-        font_size = run.font.size.pt if run.font.size is not None else \
-            st.font.size.pt if st.font.size is not None else \
-                default.font.size.pt if default.font.size is not None else 11
-        # Полужирный
-        font_bald = run.bold if run.bold is not None else \
-            st.font.bold if st.font.bold is not None else \
-                default.font.bold if default.font.bold is not None else False
-        # Курсив
-        font_italic = run.italic if run.italic is not None else \
-            st.font.italic if st.font.italic is not None else \
-                default.font.italic if default.font.italic is not None else False
-        # Подчёркивание
-        font_underline = run.underline if run.underline is not None else \
-            st.font.underline if st.font.underline is not None else \
-                default.font.underline if default.font.underline is not None else False
-        # Цвет текста
-        font_color = run.font.color.rgb if run.font.color.rgb is not None else \
-            st.font.color.rgb if st.font.color.rgb is not None else \
-                default.font.color.rgb if default.font.color.rgb is not None else False
 
-        if font_color and font_color[0] == font_color[1] == font_color[2] == 0:
-            font_color = False
-        # Цвет подчёркивания текста
-        try:
-            font_back_color = run.font.highlight_color if run.font.highlight_color is not None else \
-                st.font.highlight_color if st.font.highlight_color is not None else \
-                    default.font.highlight_color if default.font.highlight_color is not None else False
-        except:
-            font_back_color = False
+    def get_run_properties(self, document, paragraph, run):
+        """
+        Возвращает свойства для данного run
+        """
+        if run is None:
+            # Пустой run или параграф без run-ов — возвращаем "нейтральные" значения
+            return {
+                "font_name": "Unknown (no run)",
+                "font_size": None,
+                "font_bold": False,
+                "font_italic": False,
+                "font_underline": False,
+                "font_color": False,
+                "font_highlight": False,
+                "alignment": paragraph.alignment,
+                "keep_with_next": paragraph.paragraph_format.keep_with_next,
+                "page_break_before": paragraph.paragraph_format.page_break_before,
+                "space_before": paragraph.paragraph_format.space_before.pt if paragraph.paragraph_format.space_before else 0.0,
+                "space_after": paragraph.paragraph_format.space_after.pt if paragraph.paragraph_format.space_after else 0.0,
+                "left_indent": paragraph.paragraph_format.left_indent.cm if paragraph.paragraph_format.left_indent else 0.0,
+                "right_indent": paragraph.paragraph_format.right_indent.cm if paragraph.paragraph_format.right_indent else 0.0,
+                "first_line_indent": paragraph.paragraph_format.first_line_indent.cm if paragraph.paragraph_format.first_line_indent else 0.0,
+                "line_spacing": paragraph.paragraph_format.line_spacing,
+                "is_list": False
+            }
 
-        # Выравнивание (лево/центр/право/ширина)
-        alignment = formatting.alignment if formatting.alignment is not None else \
-            st_formatting.alignment if st_formatting.alignment is not None else \
-                def_formatting.alignment if def_formatting.alignment is not None else WD_PARAGRAPH_ALIGNMENT.LEFT
-        # Не отрывать от следующего
-        keep_with_next = formatting.keep_with_next if formatting.keep_with_next is not None else \
-            st_formatting.keep_with_next if st_formatting.keep_with_next is not None else \
-                def_formatting.keep_with_next if def_formatting.keep_with_next is not None else False
-        # С новой страницы
-        page_break_before = formatting.page_break_before if formatting.page_break_before is not None else \
-            st_formatting.page_break_before if st_formatting.page_break_before is not None else \
-                def_formatting.page_break_before if def_formatting.page_break_before is not None else False
-        # Верт отступ перед абзацем
-        space_before = formatting.space_before.pt if formatting.space_before is not None else \
-            st_formatting.space_before.pt if st_formatting.space_before is not None else \
-                def_formatting.space_before.pt if def_formatting.space_before is not None else 0.0
-        # Верт отступ перед абзацем
-        space_after = formatting.space_after.pt if formatting.space_after is not None else \
-            st_formatting.space_after.pt if st_formatting.space_after is not None else \
-                def_formatting.space_after.pt if def_formatting.space_after is not None else 0.0
-        # Отступ слева
-        left_indent = round(formatting.left_indent.cm, 2) if formatting.left_indent is not None else \
-            round(st_formatting.left_indent.cm, 2) if st_formatting.left_indent is not None else \
-                round(def_formatting.left_indent.cm, 2) if def_formatting.left_indent is not None else 0.0
-        # Отступ справа
-        right_indent = round(formatting.right_indent.cm, 2) if formatting.right_indent is not None else \
-            round(st_formatting.right_indent.cm, 2) if st_formatting.right_indent is not None else \
-                round(def_formatting.right_indent.cm, 2) if def_formatting.right_indent is not None else 0.0
-        # Красная строка
-        first_line_indent = round(formatting.first_line_indent.cm, 2) if formatting.first_line_indent is not None else \
-            round(st_formatting.first_line_indent.cm, 2) if st_formatting.first_line_indent is not None else \
-                round(def_formatting.first_line_indent.cm, 2) if def_formatting.first_line_indent is not None else 0.0
-        # Межстрочный интервал
-        line_spacing = formatting.line_spacing if formatting.line_spacing is not None else \
-            st_formatting.line_spacing if st_formatting.line_spacing is not None else \
-                def_formatting.line_spacing if def_formatting.line_spacing is not None else 1.0
+        # ── 1. Символьные свойства (run.font) ─────────────────────────────────────
 
-        is_list = self.is_list(p)
+        def resolve_font_property(getter_run, getter_style, default_value):
+            """ Три-state разрешение: run → style chain → defaults """
+            val = getter_run()
+            if val is not None:
+                return val
 
-        paragraph_stats = {
+            # Идём по цепочке стилей параграфа
+            style = paragraph.style
+            while style is not None:
+                val = getter_style(style)
+                if val is not None:
+                    return val
+                style = style.base_style
+
+            # Последний уровень — document defaults
+            defaults = document.styles.element.xpath('./w:docDefaults/w:rPrDefault/w:rPr')
+            if defaults:
+                # Здесь нужно парсить XML, но для простоты часто возвращают default_value
+                pass  # можно доработать при необходимости
+
+            return default_value
+
+        # ── Шрифт ──
+        font_name = resolve_font_property(
+            lambda: run.font.name,
+            lambda s: s.font.name,
+            "Calibri"   # или "Times New Roman" — зависит от твоих требований
+        )
+
+        # ── Размер шрифта ──
+        font_size_pt = resolve_font_property(
+            lambda: run.font.size.pt if run.font.size else None,
+            lambda s: s.font.size.pt if s.font.size else None,
+            11.0
+        )
+
+        # ── Bold / Italic / Underline (три-state) ──
+        font_bold = resolve_font_property(
+            lambda: run.bold,
+            lambda s: s.font.bold,
+            False
+        )
+
+        font_italic = resolve_font_property(
+            lambda: run.italic,
+            lambda s: s.font.italic,
+            False
+        )
+
+        font_underline = resolve_font_property(
+            lambda: run.underline,
+            lambda s: s.font.underline,
+            False
+        )  # может быть WD_UNDERLINE.SINGLE и т.д.
+
+        # ── Цвет текста ──
+        def get_color_rgb(obj):
+            if obj and obj.rgb:
+                return obj.rgb
+            return None
+
+        font_color_rgb = resolve_font_property(
+            lambda: get_color_rgb(run.font.color),
+            lambda s: get_color_rgb(s.font.color),
+            None
+        )
+        font_color = font_color_rgb if font_color_rgb else False
+        if font_color_rgb and font_color_rgb == RGBColor(0, 0, 0):
+            font_color = False  # часто чёрный = отсутствие явного цвета
+
+        # ── Highlight (подсветка фона) ──
+        
+        ''' try:
+            font_highlight = resolve_font_property(
+            lambda: run.font.highlight_color,
+            lambda s: s.font.highlight_color,
+            None
+        )
+        except ValueError as e:
+            font_highlight = None'''
+            
+        font_highlight = None
+
+        # ── 2. Параграфные свойства (не зависят от run) ───────────────────────────
+
+        pf = paragraph.paragraph_format
+        st = paragraph.style
+        def_style = st.base_style if st.base_style else document.styles["Normal"]
+        def_pf = def_style.paragraph_format
+
+        def resolve_para_property(getter):
+            val = getter(pf)
+            if val is not None:
+                return val
+            val = getter(st.paragraph_format)
+            if val is not None:
+                return val
+            val = getter(def_pf)
+            if val is not None:
+                return val
+            return None  # или дефолтное значение
+
+        alignment = resolve_para_property(lambda fmt: fmt.alignment) or WD_PARAGRAPH_ALIGNMENT.LEFT
+        keep_with_next = resolve_para_property(lambda fmt: fmt.keep_with_next) or False
+        page_break_before = resolve_para_property(lambda fmt: fmt.page_break_before) or False
+
+        space_before = (resolve_para_property(lambda fmt: fmt.space_before.pt if fmt.space_before else None) or 0.0)
+        space_after  = (resolve_para_property(lambda fmt: fmt.space_after.pt  if fmt.space_after  else None) or 0.0)
+
+        left_indent  = round(resolve_para_property(lambda fmt: fmt.left_indent.cm  if fmt.left_indent  else None) or 0.0, 2)
+        right_indent = round(resolve_para_property(lambda fmt: fmt.right_indent.cm if fmt.right_indent else None) or 0.0, 2)
+        first_line   = round(resolve_para_property(lambda fmt: fmt.first_line_indent.cm if fmt.first_line_indent else None) or 0.0, 2)
+
+        line_spacing = resolve_para_property(lambda fmt: fmt.line_spacing) or 1.0
+
+        is_list = self.is_list_item(paragraph)[0]
+
+        return {
             "font_name": font_name,
-            "font_size": font_size,
-            "font_bald": font_bald,
+            "font_size": font_size_pt,
+            "font_bold": font_bold,
             "font_italic": font_italic,
             "font_underline": font_underline,
             "font_color": font_color,
-            "font_back_color": font_back_color,
+            "font_highlight": font_highlight,  # было font_back_color
             "alignment": alignment,
             "keep_with_next": keep_with_next,
             "page_break_before": page_break_before,
@@ -335,11 +405,10 @@ class DocumentParser:
             "space_after": space_after,
             "left_indent": left_indent,
             "right_indent": right_indent,
-            "first_line_indent": first_line_indent,
+            "first_line_indent": first_line,
             "line_spacing": line_spacing,
-            "is_list": is_list,
+            "is_list": is_list
         }
-        return paragraph_stats
 
     # This function extracts the tables and paragraphs from the document object
     @staticmethod
@@ -438,25 +507,51 @@ class DocumentParser:
                 pass
         return None
 
+
     @staticmethod
-    def is_list_item(paragraph):
-        """Возвращает (is_list: bool, level: int). Работает даже если numPr отсутствует."""
+    def is_list_item(paragraph: Paragraph, max_depth: int = 12):
+
         if not isinstance(paragraph, Paragraph):
-            return False, 0
+            return False, None
 
-        # Самый надёжный способ — XML
-        pPr = paragraph._p.pPr
+        p = paragraph._p
+        pPr = p.pPr
+
+        # 1. Прямая нумерация в самом параграфе (самый надёжный случай)
         if pPr is not None and pPr.numPr is not None:
-            ilvl = paragraph._p.xpath('.//w:ilvl/@w:val')
-            level = int(ilvl[0]) + 1 if ilvl else 1
-            return True, level
+            ilvl_nodes = p.xpath('.//w:ilvl/@w:val')
+            if ilvl_nodes:
+                try:
+                    level = int(ilvl_nodes[0]) + 1
+                    return True, level
+                except (ValueError, IndexError):
+                    pass
+            return True, 1  # ilvl нет → считаем первым уровнем
 
-        # Стиль List / List Paragraph / пользовательские списки
-        style_name = (paragraph.style.name or "").lower()
-        if any(x in style_name for x in ("list", "нумерованный", "маркированный", "bullet", "number")):
-            return True, 1
+        # 2. Ищем в стиле и цепочке базовых стилей
+        style = paragraph.style
+        depth = 0
+
+        while style is not None and depth < max_depth:
+            style_elm = style._element
+            if style_elm is not None:
+                pPr_style = style_elm.pPr
+                if pPr_style is not None and pPr_style.numPr is not None:
+                    # Нашли numPr в стиле
+                    ilvl_nodes_style = style_elm.xpath('.//w:ilvl/@w:val')
+                    if ilvl_nodes_style:
+                        try:
+                            level = int(ilvl_nodes_style[0]) + 1
+                            return True, level
+                        except (ValueError, IndexError):
+                            pass
+                    return True, 1  # ilvl отсутствует → уровень 1
+
+            style = style.base_style
+            depth += 1
 
         return False, 0
+
 
     @staticmethod
     def has_image(paragraph):
@@ -535,146 +630,161 @@ class DocumentParser:
     
     def parse_document(self, filename):
         document = Document(filename)
-        written_comments = []
+        written_comments = []           # для совместимости / отладки
         comment_count = 0
 
-        # Состояния
+        # Переменные для отложенного комментирования
+        prev_paragraph = None
+        pending_errors = []
+        pending_author = "System"
+
         image_name_check = 0
         text_after_table_check = 0
         first_paragraph_not_reached = True
 
-        # Накопители для комментария
-        current_paragraph = None
-        current_errors = []
-        current_author = "System"
-        current_target_runs = []
-
         for block in self.iter_block_items(document):
-            block_errors = []
-            block_author = "System"
-            target_paragraph = None
-            target_runs = []
+            current_errors = []
+            current_author = "System"
+            current_paragraph = None
 
-            # Проверка полей документа (один раз в начале)
-            if first_paragraph_not_reached and isinstance(block, Paragraph):
-                first_paragraph_not_reached = False
-                margin_comments = self.parse_margins(document)
-                for section_title, errors in margin_comments.items():
-                    if errors:
-                        self.create_comment(document, block.runs, section_title, errors)
-                        comment_count += 1
-                        written_comments.append([section_title, errors])
-
-            # ====================== ПАРАГРАФ ======================
             if isinstance(block, Paragraph):
                 p = block
-                target_paragraph = p
-                block_type, extra = self._classify_paragraph(p)
-                
-                if len(p.runs) == 0:
-                    continue
 
-                # Определяем чек-лист и автора
-                if block_type.startswith("heading"):
-                    level = int(block_type.replace("heading", ""))
+
+                # Поля документа — один раз в начале
+                if first_paragraph_not_reached and isinstance(block, Paragraph):
+                    first_paragraph_not_reached = False
+                    margin_comments = self.parse_margins(document)
+                    for section_title, errors in margin_comments.items():
+                        if errors:
+                            self.create_comment(document, block.runs, section_title, errors)
+                            comment_count += 1
+                            written_comments.append([section_title, errors])
+
+                # Классификация параграфа
+                category, extra = self._classify_paragraph(p)
+
+                # Выбор чек-листа и автора комментария
+                if category in ("heading1", "heading2", "heading3") or category.startswith("heading"):
+                    level = category.replace("heading", "") if category.startswith("heading") else "1"
                     checklist = getattr(self, f"heading{level}_checklist", self.heading3_checklist)
-                    block_author = f"Заголовок {level}"
-
-                elif block_type == "list":
+                    current_author = f"Заголовок {level}"
+                elif category == "list":
                     checklist = self.list_checklist
-                    block_author = "Элемент списка"
-
-                elif self.has_image(p):                                      # ← РИСУНОК
+                    current_author = "Элемент списка"
+                elif category == "image":
                     checklist = self.image_checklist
-                    block_author = "Рисунок"
+                    current_author = "Рисунок"
                     image_name_check = 2
-
-                    # Привязываем комментарий именно к run-у с картинкой
-                    image_run = next((r for r in p.runs if self.has_image_run(r)), None)
-                    target_runs = [image_run] if image_run else p.runs
-
-                elif image_name_check > 0 or block_type == "caption":        # ← НАЗВАНИЕ РИСУНКА
+                elif category == "caption" and self.enable_optional_settings.get("enable_pic_title", False) and image_name_check > 0:
                     checklist = self.image_name_checklist
-                    block_author = "Название рисунка"
-                    stats = {"format_regex": p.text.strip()}
-                    block_errors.extend(self.get_error_comment(checklist, stats))
-                    target_runs = p.runs
-
+                    current_author = "Название рисунка"
                 elif self.enable_optional_settings.get("paragraph_after_table", False) and text_after_table_check > 0:
                     checklist = self.text_after_table_checklist
-                    block_author = "Параграф после таблицы"
+                    current_author = "Параграф после таблицы"
                 else:
                     checklist = self.text_checklist
-                    block_author = "Абзац"
+                    current_author = "Абзац"
 
-                # Главная проверка — все run-ы
-                if 'checklist' in locals() and not block_errors:   # для caption уже заполнили
-                    block_errors = self.collect_paragraph_errors(p, checklist, document)
+                # Сбор ошибок по всем run-ам
+                current_errors = self.collect_paragraph_errors(p, checklist, document)
 
-                # По умолчанию комментируем весь параграф
-                if not target_runs:
-                    target_runs = p.runs
+                if current_errors:
+                    current_paragraph = p
 
-            # ====================== ТАБЛИЦА ======================
             elif isinstance(block, Table):
                 text_after_table_check = 2
-                block_author = "Таблица"
 
-                # Проверка названия таблицы
-                if self.enable_optional_settings.get("table_title", True) and current_paragraph:
-                    stats = {"format_regex": current_paragraph.text.strip()}
-                    name_errors = self.get_error_comment(self.table_name_checklist, stats)
-                    if name_errors:
-                        current_errors.extend(name_errors)
-                        current_author = "Название таблицы"
+                # Проверка названия таблицы (отложенно — на предыдущем параграфе)
+                if self.enable_optional_settings.get("table_title", False) and isinstance(prev_paragraph, Paragraph):
+                    caption_errors = self.collect_paragraph_errors(
+                        prev_paragraph, self.table_name_checklist, document
+                    )
+                    if caption_errors:
+                        self.create_comment(
+                            document=document,
+                            runs=prev_paragraph.runs,
+                            element="Название таблицы",
+                            comments=caption_errors
+                        )
+                        comment_count += 1
+                        written_comments.append(caption_errors)
+                    else:
+                        # Можно добавить предупреждение "Нет названия таблицы"
+                        pass
 
-                # Проверка содержимого ячеек
-                for r_idx, row in enumerate(block.rows):
-                    for c_idx, cell in enumerate(row.cells):
+                # Проверка содержимого таблицы
+                table_errors = []
+                first_valid_paragraph = None
+
+                for row_idx, row in enumerate(block.rows):
+                    for col_idx, cell in enumerate(row.cells):
                         if not cell.text.strip():
                             continue
                         for cell_p in cell.paragraphs:
-                            if target_paragraph is None:
-                                target_paragraph = cell_p
-                                target_runs = cell_p.runs[:1] if cell_p.runs else []
+                            if not cell_p.runs or not cell_p.text.strip():
+                                continue
 
-                            cell_stats = self.get_run_properties(document, cell_p,
-                                                                 cell_p.runs[0] if cell_p.runs else None)
-                            cell_stats["vert_alignment"] = cell.vertical_alignment or WD_ALIGN_VERTICAL.TOP
+                            if first_valid_paragraph is None:
+                                first_valid_paragraph = cell_p
 
-                            checklist = self.table_headings_checklist if \
-                                (self.enable_optional_settings.get("table_headings_top", True) and r_idx == 0) or \
-                                (self.enable_optional_settings.get("table_headings_left", False) and c_idx == 0) \
-                                else self.table_text_checklist
+                            is_heading = (
+                                (self.enable_optional_settings.get("table_headings_top", False) and row_idx == 0) or
+                                (self.enable_optional_settings.get("table_headings_left", False) and col_idx == 0)
+                            )
+                            checklist = self.table_headings_checklist if is_heading else self.table_text_checklist
 
-                            cell_errors = self.get_error_comment(checklist, cell_stats)
-                            if cell_errors:
-                                block_errors.extend(cell_errors)
+                            errs = self.collect_paragraph_errors(cell_p, checklist, document)
+                            table_errors.extend(errs)
+                            seen = set()
+                            table_errors_filtered = []
+                            
+                            for err in table_errors:
+                                err_key = tuple(str(x) for x in err)  # дедупликация
+                                if err_key not in seen:
+                                    seen.add(err_key)
+                                    table_errors_filtered.append(err)
 
-            # ====================== СОХРАНЕНИЕ КОММЕНТАРИЯ ======================
-            if current_paragraph and current_errors:
-                runs_to_use = current_target_runs if current_target_runs else current_paragraph.runs
-                self.create_comment(document, runs_to_use, current_author, current_errors)
+
+                if table_errors_filtered and first_valid_paragraph:
+                    current_errors = table_errors_filtered
+                    current_paragraph = first_valid_paragraph
+                    current_author = "Таблица"
+
+            # ── Сохранение предыдущего комментария (если есть) ───────────────────────
+            if prev_paragraph is not None and pending_errors:
+                self.create_comment(
+                    document=document,
+                    runs=prev_paragraph.runs,
+                    element=pending_author,
+                    comments=pending_errors
+                )
                 comment_count += 1
-                written_comments.append([current_author, current_errors])
+                written_comments.append(pending_errors)
 
-            # Переключаемся на следующий блок
-            current_paragraph = target_paragraph
-            current_errors = block_errors
-            current_author = block_author
-            current_target_runs = target_runs
+            # Передаём текущие значения дальше
+            prev_paragraph = current_paragraph
+            pending_errors = current_errors
+            pending_author = current_author
 
-            image_name_check = max(0, image_name_check - 1)
-            text_after_table_check = max(0, text_after_table_check - 1)
+            # Счётчики
+            if image_name_check > 0:
+                image_name_check -= 1
+            if text_after_table_check > 0:
+                text_after_table_check -= 1
 
-        # Последний блок документа
-        if current_paragraph and current_errors:
-            runs_to_use = current_target_runs if current_target_runs else current_paragraph.runs
-            self.create_comment(document, runs_to_use, current_author, current_errors)
+        # Последний отложенный комментарий
+        if prev_paragraph is not None and pending_errors:
+            self.create_comment(
+                document=document,
+                runs=prev_paragraph.runs,
+                element=pending_author,
+                comments=pending_errors
+            )
             comment_count += 1
-            written_comments.append([current_author, current_errors])
+            written_comments.append(pending_errors)
 
-        # Сохранение результата
+        # Сохранение файла
         basename = os.path.splitext(os.path.basename(filename))[0]
         out_path = f"Results/{basename}_Проверенный.docx"
         count = 1
@@ -684,8 +794,8 @@ class DocumentParser:
 
         os.makedirs("Results", exist_ok=True)
         document.save(out_path)
-        return written_comments
 
+        return written_comments  # или можно возвращать comment_count, save_path и т.д.
 
 if __name__ == '__main__':
     parser = DocumentParser()
