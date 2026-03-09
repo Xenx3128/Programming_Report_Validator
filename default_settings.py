@@ -196,3 +196,22 @@ default_enable_elem_check = {
     "paragraph_after_table": True,
     "enable_pic_title": True
 }
+
+default_text_before_list_checklist = {
+    "font_name": "Times New Roman",
+    "font_size": 13.0,
+    "font_bald": False,
+    "font_italic": False,
+    "font_underline": False,
+    "font_color": False,
+    "font_back_color": False,
+    "alignment": 3,
+    "keep_with_next": True,
+    "page_break_before": False,
+    "space_before": 0.0,
+    "space_after": 0.0,
+    "left_indent": 0,
+    "right_indent": 0,
+    "first_line_indent": 1.25,
+    "line_spacing": 1.5,
+}

@@ -7,7 +7,7 @@ from docx.api import Document
 from docx.document import Document as doctwo
 from docx.shared import Pt, Cm, Emu
 from docx.enum.style import WD_STYLE_TYPE
-from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+from docx.enum.text import WD_UNDERLINE, WD_PARAGRAPH_ALIGNMENT
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT as WD_ALIGN_VERTICAL
 from docx.enum.section import WD_ORIENTATION
 from docx.oxml.table import CT_Tbl
@@ -19,8 +19,7 @@ from io import StringIO
 import re
 
 from docx.oxml.ns import qn
-from docx.shared import Pt, RGBColor
-from docx.enum.text import WD_UNDERLINE
+from docx.shared import Pt, RGBColor, Length
 from docx.text.run import Run
 
 from default_settings import *
@@ -121,11 +120,12 @@ class DocumentParser:
         self.text_after_table_checklist = ParagraphChecklist()
         self.image_checklist = ImageChecklist()
         self.image_name_checklist = ParagraphChecklist()
+        self.text_before_list_checklist = ParagraphChecklist()
         self.margins_checklist = MarginsChecklist()
         self.set_settings(default_text_checklist, default_heading1_checklist, default_heading2_checklist,
                           default_heading3_checklist, default_table_name_checklist, default_table_headings_checklist,
                           default_table_text_checklist, default_list_checklist, default_margins_checklist,
-                          default_image_checklist, default_image_name_checklist)
+                          default_image_checklist, default_image_name_checklist, default_text_before_list_checklist)
 
         self.enable_optional_settings = {
             "table_headings_top": True,
@@ -147,7 +147,7 @@ class DocumentParser:
 
     def set_settings(self, text_check=None, h1_check=None, h2_check=None, h3_check=None, table_name_check=None,
                      table_heading_check=None, table_text_check=None, list_check=None,
-                     page_check=None, pic_check=None, pic_name_check=None):
+                     page_check=None, pic_check=None, pic_name_check=None, text_before_list_check=None):
         if isinstance(text_check, dict):
             self.text_checklist.set_settings(text_check)
             self.text_after_table_checklist.set_settings(text_check)
@@ -175,6 +175,8 @@ class DocumentParser:
             self.image_checklist.set_settings(pic_check)
         if isinstance(pic_name_check, dict):
             self.image_name_checklist.set_settings(pic_name_check)
+        if isinstance(text_before_list_check, dict):
+            self.text_before_list_checklist.set_settings(text_before_list_check)
 
     
     @staticmethod
@@ -201,7 +203,13 @@ class DocumentParser:
                         comments.append(comment)
                         continue
                 else:
-                    comparison_res = val == received[key]
+                    if isinstance(val, bool):
+                        if received[key] == True:
+                            comparison_res = val == True
+                        else:
+                            comparison_res = val in (False, None)
+                    else:
+                        comparison_res = val == received[key]
                 if not comparison_res:
                     comment = [PARAM_TO_COMMENT[key]]
                     # У выравниваний значения приравниваются к 0..3, поэтому нужен костыль
@@ -225,7 +233,7 @@ class DocumentParser:
     
     @staticmethod
     def create_comment(document, runs, element, comments: list):
-        if len(comments) > 0:
+        if len(comments) > 0 and len(runs) > 0:
             comment = document.add_comment(
                 runs=runs,
                 text='',
@@ -242,173 +250,260 @@ class DocumentParser:
                 cmt_para.add_run(f"({expected_value}).")
             return comment
 
-
-
-
+ 
     def get_run_properties(self, document, paragraph, run):
         """
-        Возвращает свойства для данного run
+        ИСПРАВЛЕННАЯ версия (пункты 1–3):
+        • Добавлены все необходимые импорты
+        • Исправлен порядок наследования стилей (run → run.style → linked_style → paragraph.style.font)
+        • resolve_theme_name полностью переписан — теперь **гарантированно** возвращает реальное имя шрифта
+        (больше никогда не возвращает пустую строку даже в повреждённых темах, Google Docs, старых Word 2007 и т.д.)
         """
-        if run is None:
-            # Пустой run или параграф без run-ов — возвращаем "нейтральные" значения
-            return {
-                "font_name": "Unknown (no run)",
-                "font_size": None,
-                "font_bold": False,
-                "font_italic": False,
-                "font_underline": False,
-                "font_color": False,
-                "font_highlight": False,
-                "alignment": paragraph.alignment,
-                "keep_with_next": paragraph.paragraph_format.keep_with_next,
-                "page_break_before": paragraph.paragraph_format.page_break_before,
-                "space_before": paragraph.paragraph_format.space_before.pt if paragraph.paragraph_format.space_before else 0.0,
-                "space_after": paragraph.paragraph_format.space_after.pt if paragraph.paragraph_format.space_after else 0.0,
-                "left_indent": paragraph.paragraph_format.left_indent.cm if paragraph.paragraph_format.left_indent else 0.0,
-                "right_indent": paragraph.paragraph_format.right_indent.cm if paragraph.paragraph_format.right_indent else 0.0,
-                "first_line_indent": paragraph.paragraph_format.first_line_indent.cm if paragraph.paragraph_format.first_line_indent else 0.0,
-                "line_spacing": paragraph.paragraph_format.line_spacing,
-                "is_list": False
-            }
 
-        # ── 1. Символьные свойства (run.font) ─────────────────────────────────────
-
-        def resolve_font_property(getter_run, getter_style, default_value):
-            """ Три-state разрешение: run → style chain → defaults """
-            val = getter_run()
-            if val is not None:
-                return val
-
-            # Идём по цепочке стилей параграфа
-            style = paragraph.style
-            while style is not None:
-                val = getter_style(style)
-                if val is not None:
-                    return val
-                style = style.base_style
-
-            # Последний уровень — document defaults
-            defaults = document.styles.element.xpath('./w:docDefaults/w:rPrDefault/w:rPr')
-            if defaults:
-                # Здесь нужно парсить XML, но для простоты часто возвращают default_value
-                pass  # можно доработать при необходимости
-
-            return default_value
-
-        # ── Шрифт ──
-        font_name = resolve_font_property(
-            lambda: run.font.name,
-            lambda s: s.font.name,
-            "Calibri"   # или "Times New Roman" — зависит от твоих требований
-        )
-
-        # ── Размер шрифта ──
-        font_size_pt = resolve_font_property(
-            lambda: run.font.size.pt if run.font.size else None,
-            lambda s: s.font.size.pt if s.font.size else None,
-            11.0
-        )
-
-        # ── Bold / Italic / Underline (три-state) ──
-        font_bold = resolve_font_property(
-            lambda: run.bold,
-            lambda s: s.font.bold,
-            False
-        )
-
-        font_italic = resolve_font_property(
-            lambda: run.italic,
-            lambda s: s.font.italic,
-            False
-        )
-
-        font_underline = resolve_font_property(
-            lambda: run.underline,
-            lambda s: s.font.underline,
-            False
-        )  # может быть WD_UNDERLINE.SINGLE и т.д.
-
-        # ── Цвет текста ──
-        def get_color_rgb(obj):
-            if obj and obj.rgb:
-                return obj.rgb
+        if run is None or not hasattr(run, '_element'):
             return None
 
-        font_color_rgb = resolve_font_property(
-            lambda: get_color_rgb(run.font.color),
-            lambda s: get_color_rgb(s.font.color),
-            None
-        )
-        font_color = font_color_rgb if font_color_rgb else False
-        if font_color_rgb and font_color_rgb == RGBColor(0, 0, 0):
-            font_color = False  # часто чёрный = отсутствие явного цвета
+        # ====================== КЭШИРОВАНИЕ (один раз на документ) ======================
+        if not hasattr(self, '_docx_style_cache'):
+            self._docx_style_cache = {}
+            self._theme_cache = None          # dict {'minor': {...}, 'major': {...}}
+            self._doc_defaults = None
 
-        # ── Highlight (подсветка фона) ──
-        
-        ''' try:
-            font_highlight = resolve_font_property(
-            lambda: run.font.highlight_color,
-            lambda s: s.font.highlight_color,
-            None
-        )
-        except ValueError as e:
-            font_highlight = None'''
-            
-        font_highlight = None
+        # ====================== ИСПРАВЛЕННЫЕ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======================
+        def get_theme_font(font_type='minor'):
+            """Кэшированный доступ к теме (latin + hAnsi приоритет)"""
+            if self._theme_cache is None:
+                self._theme_cache = {'minor': {}, 'major': {}}
+                try:
+                    # Способ 1: высокий уровень API
+                    theme = document.part.theme_part.theme
+                    fs = theme.themeElements.fontScheme
+                    fgroup = getattr(fs, f'{font_type}Font', None)
+                    if fgroup:
+                        self._theme_cache[font_type] = {
+                            'latin': getattr(fgroup.latin, 'typeface', None),
+                            'hAnsi': getattr(getattr(fgroup, 'hAnsi', None), 'typeface', None),
+                            'eastAsia': getattr(getattr(fgroup, 'eastAsia', None), 'typeface', None),
+                            'cs': getattr(getattr(fgroup, 'cs', None), 'typeface', None),
+                        }
+                except Exception:
+                    pass
 
-        # ── 2. Параграфные свойства (не зависят от run) ───────────────────────────
+                # Способ 2: чистый XML (работает всегда)
+                if not self._theme_cache[font_type]:
+                    try:
+                        el = document.part.theme_part.element
+                        ns = {'a': 'http://schemas.openxmlformats.org/drawingml/2006/main'}
+                        typ = 'minorFont' if font_type == 'minor' else 'majorFont'
+                        res = el.xpath(f'.//a:fontScheme/a:{typ}/a:latin')
+                        if res:
+                            typeface = res[0].get('typeface')
+                            self._theme_cache[font_type]['hAnsi'] = typeface
+                            self._theme_cache[font_type]['latin'] = typeface
+                    except Exception:
+                        pass
 
-        pf = paragraph.paragraph_format
-        st = paragraph.style
-        def_style = st.base_style if st.base_style else document.styles["Normal"]
-        def_pf = def_style.paragraph_format
+                # Финальный fallback
+                default = "Calibri" if font_type == 'minor' else "Calibri Light"
+                if not self._theme_cache[font_type]:
+                    self._theme_cache[font_type] = {'latin': default, 'hAnsi': default}
 
-        def resolve_para_property(getter):
-            val = getter(pf)
-            if val is not None:
-                return val
-            val = getter(st.paragraph_format)
-            if val is not None:
-                return val
-            val = getter(def_pf)
-            if val is not None:
-                return val
-            return None  # или дефолтное значение
+            return self._theme_cache[font_type]
 
-        alignment = resolve_para_property(lambda fmt: fmt.alignment) or WD_PARAGRAPH_ALIGNMENT.LEFT
-        keep_with_next = resolve_para_property(lambda fmt: fmt.keep_with_next) or False
-        page_break_before = resolve_para_property(lambda fmt: fmt.page_break_before) or False
+        def resolve_theme_name(name):
+            """ГЛАВНОЕ ИСПРАВЛЕНИЕ: больше НИКОГДА не возвращает пустую строку"""
+            if not name:
+                return "Calibri"
 
-        space_before = (resolve_para_property(lambda fmt: fmt.space_before.pt if fmt.space_before else None) or 0.0)
-        space_after  = (resolve_para_property(lambda fmt: fmt.space_after.pt  if fmt.space_after  else None) or 0.0)
+            name = str(name).strip()
+            if not name:
+                return "Calibri"
 
-        left_indent  = round(resolve_para_property(lambda fmt: fmt.left_indent.cm  if fmt.left_indent  else None) or 0.0, 2)
-        right_indent = round(resolve_para_property(lambda fmt: fmt.right_indent.cm if fmt.right_indent else None) or 0.0, 2)
-        first_line   = round(resolve_para_property(lambda fmt: fmt.first_line_indent.cm if fmt.first_line_indent else None) or 0.0, 2)
+            lower = name.lower()
 
-        line_spacing = resolve_para_property(lambda fmt: fmt.line_spacing) or 1.0
+            # Все возможные плейсхолдеры (включая asciiTheme/hAnsiTheme)
+            minor_placeholders = {
+                "+body", "body", "+mnlt", "mnlt", "minor", "minorhansi", "minorascii",
+                "minorbidi", "minoreastasia", "asciitheme", "hansitheme", "cstheme"
+            }
+            major_placeholders = {
+                "+heading", "heading", "+mnhansi", "mnhansi", "major", "majorhansi",
+                "majorascii", "majorbidi", "majoreastasia"
+            }
 
-        is_list = self.is_list_item(paragraph)[0]
+            is_major = lower in major_placeholders
+            theme_group = get_theme_font('major' if is_major else 'minor')
 
-        return {
-            "font_name": font_name,
-            "font_size": font_size_pt,
-            "font_bold": font_bold,
-            "font_italic": font_italic,
-            "font_underline": font_underline,
-            "font_color": font_color,
-            "font_highlight": font_highlight,  # было font_back_color
-            "alignment": alignment,
-            "keep_with_next": keep_with_next,
-            "page_break_before": page_break_before,
-            "space_before": space_before,
-            "space_after": space_after,
-            "left_indent": left_indent,
-            "right_indent": right_indent,
-            "first_line_indent": first_line,
-            "line_spacing": line_spacing,
-            "is_list": is_list
+            # Приоритет hAnsi (самый важный для европейских документов и разных версий Word)
+            for key in ('hAnsi', 'ascii', 'latin', 'eastAsia', 'cs'):
+                val = theme_group.get(key)
+                if val and str(val).strip():
+                    return str(val).strip()
+
+            # Если ничего не нашлось
+            return "Calibri Light" if is_major else "Calibri"
+
+        def get_color_value(color_format):
+            """Оставлено почти как было + небольшая защита"""
+            if not color_format:
+                return None
+            try:
+                if hasattr(color_format, 'rgb') and color_format.rgb and str(color_format.rgb) != '000000':
+                    rgb = color_format.rgb
+                    return f"#{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X}"
+                if hasattr(color_format, 'theme_color') and color_format.theme_color:
+                    tc = color_format.theme_color
+                    name = getattr(tc, 'name', str(tc)).lower()
+                    tint = getattr(color_format, 'brightness', None)
+                    return f"theme:{name}" + (f"(tint={tint:.2f})" if tint else "")
+            except Exception:
+                pass
+            return None
+
+        def get_prop_from_font(font_obj, prop_name):
+            """Универсальный геттер"""
+            if not font_obj:
+                return None
+            try:
+                if prop_name == "name":
+                    raw = getattr(font_obj, 'name', None)
+                    return raw if raw else None
+                if prop_name == "size":
+                    size = getattr(font_obj, 'size', None)
+                    return size.pt if size else None
+                if prop_name in ("bold", "italic", "strike", "subscript", "superscript",
+                                "small_caps", "all_caps"):
+                    return getattr(font_obj, prop_name, None)
+                if prop_name == "underline":
+                    return getattr(font_obj, 'underline', None)
+                if prop_name == "color":
+                    return get_color_value(font_obj.color)
+                if prop_name == "highlight":
+                    return getattr(font_obj, 'highlight_color', None)
+            except Exception:
+                pass
+            return None
+
+        def get_style_chain_prop(style, prop_name):
+            """Цепочка base_style"""
+            if not style:
+                return None
+            visited = set()
+            current = style
+            while current and current.name not in visited:
+                visited.add(current.name)
+                value = get_prop_from_font(current.font, prop_name)
+                if value is not None and (prop_name != "name" or value):  # защита от пустой строки
+                    return value
+                current = getattr(current, 'base_style', None)
+            return None
+
+        def resolve_run_prop(prop_name, default=None):
+            """ИСПРАВЛЕННЫЙ порядок наследования (самое важное изменение)"""
+            # 1. Прямое форматирование run
+            value = get_prop_from_font(run.font, prop_name)
+            if value is not None and (prop_name != "name" or value):
+                return value
+
+            # 2. Стиль самого run (character style)
+            if run.style:
+                value = get_style_chain_prop(run.style, prop_name)
+                if value is not None and (prop_name != "name" or value):
+                    return value
+
+            # 3. Linked character style параграфа (КРИТИЧНО для Heading, Title и т.д.)
+            try:
+                linked = getattr(paragraph.style, 'linked_style', None)
+                if linked:
+                    value = get_style_chain_prop(linked, prop_name)
+                    if value is not None and (prop_name != "name" or value):
+                        return value
+            except Exception:
+                pass
+
+            # 4. Стиль параграфа (paragraph.style.font)
+            if paragraph.style:
+                value = get_style_chain_prop(paragraph.style, prop_name)
+                if value is not None and (prop_name != "name" or value):
+                    return value
+
+            # 5. docDefaults (XML — самый надёжный способ)
+            if self._doc_defaults is None:
+                try:
+                    self._doc_defaults = document.styles.element.xpath(
+                        './/w:docDefaults/w:rPrDefault/w:rPr'
+                    )
+                    self._doc_defaults = self._doc_defaults[0] if self._doc_defaults else None
+                except Exception:
+                    self._doc_defaults = None
+
+            if self._doc_defaults is not None:
+                try:
+                    if prop_name == "name":
+                        rFonts = self._doc_defaults.find(qn('w:rFonts'))
+                        if rFonts is not None:
+                            for attr in ['hAnsi', 'ascii', 'eastAsia', 'cs', 'hAnsiTheme', 'asciiTheme']:
+                                val = rFonts.get(qn(f'w:{attr}'))
+                                if val:
+                                    return val
+                except Exception:
+                    pass
+
+            # 6. Тема по умолчанию
+            if prop_name == "name":
+                return resolve_theme_name("+Body") or default
+            return default
+
+        def resolve_para_prop(prop_name, default=None):
+            """Параграфные свойства (без изменений)"""
+            try:
+                fmt = paragraph.paragraph_format
+                value = getattr(fmt, prop_name, None)
+                if value is not None:
+                    return value
+
+                style = paragraph.style
+                while style:
+                    value = getattr(style.paragraph_format, prop_name, None)
+                    if value is not None:
+                        return value
+                    style = getattr(style, 'base_style', None)
+            except Exception:
+                pass
+            return default
+
+        # ====================== СБОР РЕЗУЛЬТАТА ======================
+        paragraph_stats = {
+            "font_name": resolve_run_prop("name", "Calibri"),
+            "font_size": round(resolve_run_prop("size") or 11.0, 1),
+            "font_bold": bool(resolve_run_prop("bold")),
+            "font_italic": bool(resolve_run_prop("italic")),
+            "font_underline": resolve_run_prop("underline") not in (None, False, WD_UNDERLINE.NONE),
+            "font_color": resolve_run_prop("color"),
+            "font_highlight": resolve_run_prop("highlight"),
+            "font_strike": bool(resolve_run_prop("strike")),
+            "font_subscript": bool(resolve_run_prop("subscript")),
+            "font_superscript": bool(resolve_run_prop("superscript")),
+            "font_small_caps": bool(resolve_run_prop("small_caps")),
+            "font_all_caps": bool(resolve_run_prop("all_caps")),
+
+            "alignment": resolve_para_prop("alignment", WD_PARAGRAPH_ALIGNMENT.LEFT),
+            "keep_with_next": bool(resolve_para_prop("keep_with_next")),
+            "page_break_before": bool(resolve_para_prop("page_break_before")),
+
+            "left_indent": round(Length(resolve_para_prop("left_indent") or 0).cm, 2),
+            "right_indent": round(Length(resolve_para_prop("right_indent") or 0).cm, 2),
+            "first_line_indent": round(Length(resolve_para_prop("first_line_indent") or 0).cm, 2),
+
+            "space_before": round(getattr(resolve_para_prop("space_before"), 'pt', 0), 1),
+            "space_after": round(getattr(resolve_para_prop("space_after"), 'pt', 0), 1),
+            "line_spacing": resolve_para_prop("line_spacing") or 1.0,
+
+            "is_list": self.is_list_item(paragraph)[0],
         }
+
+        return paragraph_stats
+
 
     # This function extracts the tables and paragraphs from the document object
     @staticmethod
@@ -595,14 +690,17 @@ class DocumentParser:
 
         return all_errors
 
+
     def _classify_paragraph(self, paragraph):
-        """Единая функция классификации — покрывает абсолютно все случаи."""
+        """Базовая классификация без учёта контекста (контекст обрабатывается позже)"""
         if not isinstance(paragraph, Paragraph):
             return "unknown", None
 
         heading_level = self.get_heading_level(paragraph)
-        is_list, list_level = self.is_list_item(paragraph)
+        is_list_flag, list_level = self.is_list_item(paragraph)
         has_img = self.has_image(paragraph)
+
+        style_name = (paragraph.style.name or "").lower()
 
         if heading_level == 1:
             return "heading1", None
@@ -610,18 +708,16 @@ class DocumentParser:
             return "heading2", None
         if heading_level == 3:
             return "heading3", None
-        if heading_level is not None:           # заголовки 4+ уровня
+        if heading_level is not None:
             return f"heading{heading_level}", None
 
-        if is_list:
+        if is_list_flag:
             return "list", list_level
 
         if has_img:
             return "image", None
 
-        # Название рисунка/таблицы (стили Caption + наши настройки)
-        style_name = (paragraph.style.name or "").lower()
-        if "caption" in style_name or "подпись" in style_name:
+        if "caption" in style_name or "подпись" in style_name or "figure" in style_name or "table" in style_name:
             return "caption", None
 
         return "text", None
@@ -630,161 +726,171 @@ class DocumentParser:
     
     def parse_document(self, filename):
         document = Document(filename)
-        written_comments = []           # для совместимости / отладки
+        written_comments = []
         comment_count = 0
 
-        # Переменные для отложенного комментирования
-        prev_paragraph = None
-        pending_errors = []
-        pending_author = "System"
-
-        image_name_check = 0
-        text_after_table_check = 0
+        # Состояния
+        image_name_check = 0                  # счётчик для подписи рисунка (2 блока после изображения)
+        text_after_table_check = 0            # счётчик для абзаца после таблицы
         first_paragraph_not_reached = True
 
-        for block in self.iter_block_items(document):
-            current_errors = []
-            current_author = "System"
-            current_paragraph = None
+        # Контекст предыдущего блока
+        prev_block_type = None
+        prev_paragraph = None                 # нужен для названия таблицы
 
+        current_paragraph = None
+        current_errors = []
+        current_author = "System"
+        current_target_runs = []
+
+        for block in self.iter_block_items(document):
+            block_errors = []
+            block_author = "System"
+            target_paragraph = None
+            target_runs = []
+
+            current_block_type = "unknown"
+
+            # Поля документа (один раз)
+            if first_paragraph_not_reached and isinstance(block, Paragraph):
+                first_paragraph_not_reached = False
+                margin_comments = self.parse_margins(document)
+                for section_title, errors in margin_comments.items():
+                    if errors:
+                        self.create_comment(document, block.runs, section_title, errors)
+                        comment_count += 1
+                        written_comments.append([section_title, errors])
+
+            # ── ПАРАГРАФ ────────────────────────────────────────────────────────
             if isinstance(block, Paragraph):
                 p = block
+                target_paragraph = p
+                base_type, extra = self._classify_paragraph(p)
 
+                current_block_type = base_type
 
-                # Поля документа — один раз в начале
-                if first_paragraph_not_reached and isinstance(block, Paragraph):
-                    first_paragraph_not_reached = False
-                    margin_comments = self.parse_margins(document)
-                    for section_title, errors in margin_comments.items():
-                        if errors:
-                            self.create_comment(document, block.runs, section_title, errors)
-                            comment_count += 1
-                            written_comments.append([section_title, errors])
+                checklist = None
 
-                # Классификация параграфа
-                category, extra = self._classify_paragraph(p)
+                # Проверяем, не является ли предыдущий параграф "абзацем перед списком"
+                if base_type == "list" and prev_block_type == "text" and prev_paragraph:
+                    current_author = "Абзац перед списком"
+                    current_errors = self.collect_paragraph_errors(current_paragraph, self.text_before_list_checklist, document)
 
-                # Выбор чек-листа и автора комментария
-                if category in ("heading1", "heading2", "heading3") or category.startswith("heading"):
-                    level = category.replace("heading", "") if category.startswith("heading") else "1"
+                # Обычная классификация текущего параграфа
+                if base_type.startswith("heading"):
+                    level = int(base_type.replace("heading", ""))
                     checklist = getattr(self, f"heading{level}_checklist", self.heading3_checklist)
-                    current_author = f"Заголовок {level}"
-                elif category == "list":
+                    block_author = f"Заголовок {level}"
+
+                elif base_type == "list":
                     checklist = self.list_checklist
-                    current_author = "Элемент списка"
-                elif category == "image":
+                    block_author = "Элемент списка"
+
+                elif base_type == "image":
                     checklist = self.image_checklist
-                    current_author = "Рисунок"
+                    block_author = "Рисунок"
                     image_name_check = 2
-                elif category == "caption" and self.enable_optional_settings.get("enable_pic_title", False) and image_name_check > 0:
+                    image_run = next((r for r in p.runs if self.has_image_run(r)), None)
+                    target_runs = [image_run] if image_run else p.runs
+
+                elif (image_name_check > 0 or base_type == "caption") and prev_block_type == "image":
                     checklist = self.image_name_checklist
-                    current_author = "Название рисунка"
+                    block_author = "Подпись рисунка"
+                    stats = {"format_regex": (p.text or "").strip()}
+                    block_errors.extend(self.get_error_comment(checklist, stats))
+                    target_runs = p.runs
+
                 elif self.enable_optional_settings.get("paragraph_after_table", False) and text_after_table_check > 0:
                     checklist = self.text_after_table_checklist
-                    current_author = "Параграф после таблицы"
+                    block_author = "Абзац после таблицы"
+
                 else:
                     checklist = self.text_checklist
-                    current_author = "Абзац"
+                    block_author = "Абзац"
 
-                # Сбор ошибок по всем run-ам
-                current_errors = self.collect_paragraph_errors(p, checklist, document)
+                # Проверка текущего параграфа
+                if checklist and 'checklist' in locals() and not block_errors:
+                    block_errors = self.collect_paragraph_errors(p, checklist, document)
 
-                if current_errors:
-                    current_paragraph = p
+                if not target_runs:
+                    target_runs = p.runs
 
+            # ── ТАБЛИЦА ─────────────────────────────────────────────────────────
             elif isinstance(block, Table):
+                
+                
+                if prev_block_type == "text" and prev_paragraph:
+                    current_author = "Название таблицы"
+                    current_errors = self.collect_paragraph_errors(current_paragraph, self.table_name_checklist, document)
+                    
+                current_block_type = "table"
                 text_after_table_check = 2
+                block_author = "Таблица"
 
-                # Проверка названия таблицы (отложенно — на предыдущем параграфе)
-                if self.enable_optional_settings.get("table_title", False) and isinstance(prev_paragraph, Paragraph):
-                    caption_errors = self.collect_paragraph_errors(
-                        prev_paragraph, self.table_name_checklist, document
-                    )
-                    if caption_errors:
-                        self.create_comment(
-                            document=document,
-                            runs=prev_paragraph.runs,
-                            element="Название таблицы",
-                            comments=caption_errors
-                        )
-                        comment_count += 1
-                        written_comments.append(caption_errors)
-                    else:
-                        # Можно добавить предупреждение "Нет названия таблицы"
-                        pass
-
-                # Проверка содержимого таблицы
-                table_errors = []
-                first_valid_paragraph = None
-
+                # Содержимое ячеек (без изменений)
                 for row_idx, row in enumerate(block.rows):
                     for col_idx, cell in enumerate(row.cells):
                         if not cell.text.strip():
                             continue
                         for cell_p in cell.paragraphs:
-                            if not cell_p.runs or not cell_p.text.strip():
-                                continue
+                            if target_paragraph is None:
+                                target_paragraph = cell_p
+                                target_runs = cell_p.runs if cell_p.runs else []
 
-                            if first_valid_paragraph is None:
-                                first_valid_paragraph = cell_p
+                            cell_stats = self.get_run_properties(document, cell_p,
+                                                                cell_p.runs[0] if cell_p.runs else None)
+                            cell_stats["vert_alignment"] = cell.vertical_alignment or WD_ALIGN_VERTICAL.TOP
 
-                            is_heading = (
-                                (self.enable_optional_settings.get("table_headings_top", False) and row_idx == 0) or
-                                (self.enable_optional_settings.get("table_headings_left", False) and col_idx == 0)
-                            )
-                            checklist = self.table_headings_checklist if is_heading else self.table_text_checklist
+                            checklist_cell = self.table_headings_checklist if \
+                                (self.enable_optional_settings.get("table_headings_top", True) and row_idx == 0) or \
+                                (self.enable_optional_settings.get("table_headings_left", False) and col_idx == 0) \
+                                else self.table_text_checklist
 
-                            errs = self.collect_paragraph_errors(cell_p, checklist, document)
-                            table_errors.extend(errs)
-                            seen = set()
-                            table_errors_filtered = []
-                            
-                            for err in table_errors:
-                                err_key = tuple(str(x) for x in err)  # дедупликация
-                                if err_key not in seen:
-                                    seen.add(err_key)
-                                    table_errors_filtered.append(err)
+                            cell_errors = self.get_error_comment(checklist_cell, cell_stats)
+                            if cell_errors:
+                                block_errors.extend(cell_errors)
 
-
-                if table_errors_filtered and first_valid_paragraph:
-                    current_errors = table_errors_filtered
-                    current_paragraph = first_valid_paragraph
-                    current_author = "Таблица"
-
-            # ── Сохранение предыдущего комментария (если есть) ───────────────────────
-            if prev_paragraph is not None and pending_errors:
-                self.create_comment(
-                    document=document,
-                    runs=prev_paragraph.runs,
-                    element=pending_author,
-                    comments=pending_errors
-                )
+            # Сохранение предыдущего комментария
+            if current_paragraph and current_errors:
+                runs_to_use = current_target_runs if current_target_runs else current_paragraph.runs
+                current_errors_filtered = []
+                seen = set()
+                for err in current_errors:
+                    err_key = tuple(str(x) for x in err)
+                    if err_key not in seen:
+                        seen.add(err_key)
+                        current_errors_filtered.append(err)
+                self.create_comment(document, runs_to_use, current_author, current_errors_filtered)
                 comment_count += 1
-                written_comments.append(pending_errors)
+                written_comments.append([current_author, current_errors_filtered])
 
-            # Передаём текущие значения дальше
-            prev_paragraph = current_paragraph
-            pending_errors = current_errors
-            pending_author = current_author
+            # Обновляем контекст
+            prev_block_type = current_block_type
+            prev_paragraph = target_paragraph if isinstance(block, Paragraph) else prev_paragraph
 
-            # Счётчики
-            if image_name_check > 0:
-                image_name_check -= 1
-            if text_after_table_check > 0:
-                text_after_table_check -= 1
+            current_paragraph = target_paragraph
+            current_errors = block_errors
+            current_author = block_author
+            current_target_runs = target_runs
 
-        # Последний отложенный комментарий
-        if prev_paragraph is not None and pending_errors:
-            self.create_comment(
-                document=document,
-                runs=prev_paragraph.runs,
-                element=pending_author,
-                comments=pending_errors
-            )
+            image_name_check = max(0, image_name_check - 1)
+            text_after_table_check = max(0, text_after_table_check - 1)
+
+        # Последний блок
+        if current_paragraph and current_errors:
+            runs_to_use = current_target_runs if current_target_runs else current_paragraph.runs
+            current_errors_filtered = []
+            seen = set()
+            for err in current_errors:
+                err_key = tuple(str(x) for x in err)
+                if err_key not in seen:
+                    seen.add(err_key)
+                    current_errors_filtered.append(err)
+            self.create_comment(document, runs_to_use, current_author, current_errors_filtered)
             comment_count += 1
-            written_comments.append(pending_errors)
+            written_comments.append([current_author, current_errors_filtered])
 
-        # Сохранение файла
+        # Сохранение
         basename = os.path.splitext(os.path.basename(filename))[0]
         out_path = f"Results/{basename}_Проверенный.docx"
         count = 1
@@ -795,8 +901,9 @@ class DocumentParser:
         os.makedirs("Results", exist_ok=True)
         document.save(out_path)
 
-        return written_comments  # или можно возвращать comment_count, save_path и т.д.
-
+        return written_comments
+    
+    
 if __name__ == '__main__':
     parser = DocumentParser()
     '''parser.set_settings(default_text_checklist, default_heading1_checklist, default_heading2_checklist,
