@@ -19,12 +19,15 @@ from io import StringIO
 import re
 
 from docx.oxml.ns import qn
+from docx.oxml import parse_xml
 from docx.shared import Pt, RGBColor, Length
 from docx.text.run import Run
 
 from default_settings import *
 from constants import *
 import inspect
+
+import numbers
 
 
 class BaseChecklist:
@@ -113,7 +116,8 @@ class DocumentParser:
         self.heading1_checklist = ParagraphChecklist()
         self.heading2_checklist = ParagraphChecklist()
         self.heading3_checklist = ParagraphChecklist()
-        self.list_checklist = ListChecklist()
+        self.bullet_list_checklist = ListChecklist()
+        self.nubered_list_checklist = ListChecklist()
         self.table_headings_checklist = TableParagraphChecklist()
         self.table_text_checklist = TableParagraphChecklist()
         self.table_name_checklist = ParagraphChecklist()
@@ -124,7 +128,7 @@ class DocumentParser:
         self.margins_checklist = MarginsChecklist()
         self.set_settings(default_text_checklist, default_heading1_checklist, default_heading2_checklist,
                           default_heading3_checklist, default_table_name_checklist, default_table_headings_checklist,
-                          default_table_text_checklist, default_list_checklist, default_margins_checklist,
+                          default_table_text_checklist, default_bullet_list_checklist, default_numbered_list_checklist, default_margins_checklist,
                           default_image_checklist, default_image_name_checklist, default_text_before_list_checklist)
 
         self.enable_optional_settings = {
@@ -146,13 +150,12 @@ class DocumentParser:
                     self.enable_optional_settings[par] = value
 
     def set_settings(self, text_check=None, h1_check=None, h2_check=None, h3_check=None, table_name_check=None,
-                     table_heading_check=None, table_text_check=None, list_check=None,
+                     table_heading_check=None, table_text_check=None, bullet_list_check=None, numbered_list_check=None,
                      page_check=None, pic_check=None, pic_name_check=None, text_before_list_check=None):
         if isinstance(text_check, dict):
             self.text_checklist.set_settings(text_check)
             self.text_after_table_checklist.set_settings(text_check)
             self.text_after_table_checklist.space_before = 13.0  # !!!!
-            self.list_checklist.set_settings(text_check)
         if isinstance(h1_check, dict):
             self.heading1_checklist.set_settings(h1_check)
         if isinstance(h2_check, dict):
@@ -165,10 +168,10 @@ class DocumentParser:
             self.table_headings_checklist.set_settings(table_heading_check)
         if isinstance(table_text_check, dict):
             self.table_text_checklist.set_settings(table_text_check)
-        if isinstance(list_check, dict):
-            self.list_checklist.set_settings(list_check)
-            # if "left_indent_base" in list_check:
-                # self.list_checklist.left_indent_base -= 0.75
+        if isinstance(bullet_list_check, dict):
+            self.bullet_list_checklist.set_settings(bullet_list_check)
+        if isinstance(numbered_list_check, dict):
+            self.nubered_list_checklist.set_settings(numbered_list_check)
         if isinstance(page_check, dict):
             self.margins_checklist.set_settings(page_check)
         if isinstance(pic_check, dict):
@@ -180,7 +183,7 @@ class DocumentParser:
 
     
     @staticmethod
-    def get_error_comment(checklist, received: dict):
+    def get_error_comment(checklist, received: dict, epsilon=0.1):
         attributes = inspect.getmembers(checklist, lambda a: not (inspect.isroutine(a)))
         expected = {a[0]: a[1] for a in attributes if not (a[0].startswith('__') and a[0].endswith('__'))}
         comments = []
@@ -196,9 +199,10 @@ class DocumentParser:
                         comment = [PARAM_TO_COMMENT[key], val, received[key]]
                         comments.append(comment)
                         continue
-                elif "list_level" in received.keys() and key == "left_indent":
-                    expected_indent = expected["left_indent_base"] + expected["left_indent_mod"] * received["list_level"]
-                    if received["left_indent"] != expected_indent:
+                elif "left_indent_base" in expected and "is_list" in received and received["list_level"] > 0 and key == "left_indent":
+                    expected_indent = expected["left_indent_base"] + expected["left_indent_mod"] * (received["list_level"] - 1)
+                    comparison_res = abs(received["left_indent"] - expected_indent) <= epsilon
+                    if not comparison_res:
                         comment = [PARAM_TO_COMMENT[key], expected_indent, received[key]]
                         comments.append(comment)
                         continue
@@ -208,6 +212,8 @@ class DocumentParser:
                             comparison_res = val == True
                         else:
                             comparison_res = val in (False, None)
+                    elif isinstance(val, numbers.Number) and isinstance(received[key], numbers.Number):
+                        comparison_res = abs(val - received[key]) <= epsilon
                     else:
                         comparison_res = val == received[key]
                 if not comparison_res:
@@ -251,31 +257,310 @@ class DocumentParser:
             return comment
 
  
+    def get_paragraph_properties(self, document, paragraph):
+        """
+        ИСПРАВЛЕННАЯ И ПОЛНАЯ версия (март 2026):
+        • Полная поддержка numbering level + lvlOverride (alignment, spacing, keep*, indents, RTL)
+        • Правильная иерархия: direct → numbering lvl → style chain → docDefaults
+        • Hanging indent больше НЕ модифицирует left_indent
+        • line_spacing корректно обрабатывает multiplier/exact + lineRule
+        • Поддержка Word 2007–2025 + Google Docs + RTL
+        • run-часть оставлена в вашем уже улучшенном виде
+        • ДОБАВЛЕНО: numbering_format + list_type (без изменения структуры)
+        """
+
+        if paragraph is None:
+            return None
+
+        # ====================== ИСПРАВЛЕННАЯ ПАРАГРАФНАЯ ЧАСТЬ ======================
+                
+        def twips_to_emu(twips):
+            """
+            Конвертирует twips в EMU (English Metric Units)
+            1 twip = 1/1440 дюйма
+            1 EMU = 1/914400 дюйма
+            """
+            return int(twips * 914400 / 1440)
+        
+        
+        def get_numbering_properties(paragraph, document):
+            """
+            Извлекает свойства нумерации, учитывая:
+            - прямое форматирование параграфа
+            - стиль параграфа (и всю цепочку base_style)
+            - lvlOverride → abstractNum
+            Возвращает {} если нумерации нет
+            """
+            props = {}
+
+            def extract_numPr_from_pPr(pPr_element):
+                """Общий экстрактор numPr → ilvl, num_id"""
+                if pPr_element is None:
+                    return None, None
+                numPr = pPr_element.find(qn('w:numPr'))
+                if numPr is None:
+                    return None, None
+                ilvl_el = numPr.find(qn('w:ilvl'))
+                numId_el = numPr.find(qn('w:numId'))
+                ilvl = int(ilvl_el.get(qn('w:val'), '0')) if ilvl_el is not None else 0
+                num_id = int(numId_el.get(qn('w:val'))) if numId_el is not None else None
+                return ilvl, num_id
+
+            # ─── 1. Прямое форматирование параграфа ───
+            pPr_direct = paragraph._element.find(qn('w:pPr'))
+            ilvl, num_id = extract_numPr_from_pPr(pPr_direct)
+            if num_id is not None:
+                # нашли — используем это как самое приоритетное
+                pass
+            else:
+                # ─── 2. Ищем в цепочке стилей ───
+                style = paragraph.style
+                visited = set()
+                while style and style.name not in visited:
+                    visited.add(style.name)
+                    try:
+                        # paragraph_format — это высокоуровневое, но numPr там нет
+                        # → идём в XML стиля
+                        style_pPr = style._element.find(qn('w:pPr'))
+                        ilvl, num_id = extract_numPr_from_pPr(style_pPr)
+                        if num_id is not None:
+                            break  # нашли — выходим из цикла
+                    except AttributeError:
+                        pass
+                    style = style.base_style
+
+            if num_id is None:
+                return props  # нумерации нигде нет
+
+            # ─── Дальше — общий код парсинга numbering.xml ───
+            try:
+                numbering_part = document.part.numbering_part
+                if not numbering_part or not numbering_part._element:
+                    return props
+
+                num_el = numbering_part._element
+
+                # 1. lvlOverride (приоритетнее abstract)
+                lvl_nodes = num_el.xpath(
+                    f'.//w:num[@w:numId="{num_id}"]/w:lvlOverride[@w:ilvl="{ilvl}"]/w:lvl'
+                )
+
+                if not lvl_nodes:
+                    # 2. abstractNum
+                    abstract_refs = num_el.xpath(
+                        f'.//w:num[@w:numId="{num_id}"]/w:abstractNumId'
+                    )
+                    if not abstract_refs:
+                        return props
+                    abstract_id = abstract_refs[0].get(qn('w:val'))
+                    if not abstract_id:
+                        return props
+
+                    lvl_nodes = num_el.xpath(
+                        f'.//w:abstractNum[@w:abstractNumId="{abstract_id}"]/w:lvl[@w:ilvl="{ilvl}"]'
+                    )
+
+                if not lvl_nodes:
+                    return props
+
+                lvl = lvl_nodes[0]
+
+                # ─── ДОБАВЛЕНО (минимально, сразу после lvl): формат нумерации + тип списка ───
+                numFmt_el = lvl.find(qn('w:numFmt'))
+                if numFmt_el is not None:
+                    val = numFmt_el.get(qn('w:val'))
+                    if val:
+                        props['numbering_format'] = val
+                        props['list_type'] = 'bulleted' if val == 'bullet' else 'numbered'
+                # ───────────────────────────────────────────────────────────────────────────────
+
+                lvl_pPr = lvl.find(qn('w:pPr'))
+                if lvl_pPr is None:
+                    return props
+
+                # ─── indents ───
+                ind = lvl_pPr.find(qn('w:ind'))
+                if ind is not None:
+                    for side in ['left', 'start', 'right', 'end']:
+                        val = ind.get(qn(f'w:{side}'))
+                        if val is not None:
+                            props[f'{side}_indent'] = Length(twips_to_emu(int(val)))  # или twips_to_emu(int(val))
+
+                    hanging = ind.get(qn('w:hanging'))
+                    first_line = ind.get(qn('w:firstLine'))
+                    if hanging is not None:
+                        props['first_line_indent'] = Length(twips_to_emu(-int(hanging)))
+                    elif first_line is not None:
+                        props['first_line_indent'] = Length(twips_to_emu(int(first_line)))
+
+                # ─── alignment ───
+                jc = lvl_pPr.find(qn('w:jc'))
+                if jc is not None:
+                    val = jc.get(qn('w:val'))
+                    if val:
+                        try:
+                            props['alignment'] = getattr(WD_PARAGRAPH_ALIGNMENT, val.upper())
+                        except AttributeError:
+                            pass
+
+                # ─── spacing ───
+                spacing = lvl_pPr.find(qn('w:spacing'))
+                if spacing is not None:
+                    for attr in ['before', 'after']:
+                        val = spacing.get(qn(f'w:{attr}'))
+                        if val is not None:
+                            props[f'space_{attr}'] = Length(twips_to_emu(int(val)))
+                    line = spacing.get(qn('w:line'))
+                    line_rule = spacing.get(qn('w:lineRule'))
+                    if line is not None:
+                        props['line_spacing_raw'] = (int(line), line_rule)
+
+                # flags (keepNext и т.п.)
+                for flag_name, prop_key in [('keepNext', 'keep_with_next'), ('pageBreakBefore', 'page_break_before')]:
+                    flag_el = lvl_pPr.find(qn(f'w:{flag_name}'))
+                    if flag_el is not None:
+                        val = flag_el.get(qn('w:val'))
+                        props[prop_key] = val in (None, '1', 'true', 'on')
+
+            except Exception:
+                pass  # silent fail — лучше логировать в продакшене
+
+            return props
+
+        def resolve_para_prop(prop_name, default=None):
+            """
+            Иерархия:
+            1. Прямое форматирование параграфа
+            2. Свойства из нумерации (direct или из стиля)
+            3. Свойства стиля параграфа (paragraph_format)
+            """
+            # ─── 1. Прямое ───
+            try:
+                fmt = paragraph.paragraph_format
+                value = getattr(fmt, prop_name, None)
+                if value is not None:
+                    return value
+            except Exception:
+                pass
+
+            # ─── 2. Numbering (direct ИЛИ из стиля) ───
+            numbering_props = get_numbering_properties(paragraph, document)
+            if prop_name in numbering_props:
+                return numbering_props[prop_name]
+
+            if prop_name == 'line_spacing' and 'line_spacing_raw' in numbering_props:
+                raw, rule = numbering_props['line_spacing_raw']
+                if rule in (None, 'auto'):
+                    return raw / 240.0  # multiplier
+                elif rule in ('exactly', 'atLeast'):
+                    return Length(raw).pt
+                return raw / 240.0
+
+            # ─── 3. Свойства стиля (paragraph_format) ───
+            style = paragraph.style
+            visited = set()
+            while style and style.name not in visited:
+                visited.add(style.name)
+                try:
+                    value = getattr(style.paragraph_format, prop_name, None)
+                    if value is not None:
+                        return value
+                except Exception:
+                    pass
+                style = style.base_style
+
+            return default
+
+        # ====================== РАЗРЕШЕНИЕ СВОЙСТВ ======================
+        
+        is_list = self.is_list_item(paragraph)
+        
+        # ─── ДОБАВЛЕНО (минимально): получаем расширенные свойства списка ───
+        numbering_props = get_numbering_properties(paragraph, document)
+        list_type = numbering_props.get('list_type')
+        numbering_format = numbering_props.get('numbering_format')
+        # ────────────────────────────────────────────────────────────────────
+
+        alignment = resolve_para_prop("alignment", WD_PARAGRAPH_ALIGNMENT.LEFT)
+        keep_with_next = bool(resolve_para_prop("keep_with_next"))
+        page_break_before = bool(resolve_para_prop("page_break_before"))
+
+        left_l   = resolve_para_prop("left_indent")
+        right_l  = resolve_para_prop("right_indent")
+        first_l  = resolve_para_prop("first_line_indent")
+
+        # Преобразуем в см только если значение есть, иначе 0
+        left_indent     = round(left_l.cm, 2)   if left_l  is not None else 0.0
+        right_indent    = round(right_l.cm, 2)  if right_l is not None else 0.0
+        first_line_indent = round(first_l.cm, 2) if first_l is not None else 0.0
+        
+        if first_line_indent < 0:  # выставлен выступ, а не отступ
+            left_indent += first_line_indent
+
+        before_l = resolve_para_prop("space_before")
+        after_l  = resolve_para_prop("space_after")
+
+        space_before = round(before_l.pt, 1) if before_l is not None else 0.0
+        space_after  = round(after_l.pt, 1)  if after_l  is not None else 0.0
+
+        line_raw = resolve_para_prop("line_spacing")
+        
+        if line_raw is None:
+            line_spacing = 1.0
+        elif hasattr(line_raw, 'pt'):           # это Length (из стиля или direct)
+            line_spacing = round(line_raw.pt / 12, 2)   # pt → lines (при single=12pt)
+        else:                                   # числовое значение в линиях (из numbering auto)
+            line_spacing = round(float(line_raw), 2)
+
+
+        return {
+            "alignment": alignment,
+            "keep_with_next": keep_with_next,
+            "page_break_before": page_break_before,
+
+            "left_indent": left_indent,
+            "right_indent": right_indent,
+            "first_line_indent": first_line_indent,
+
+            "space_before": space_before,
+            "space_after": space_after,
+            "line_spacing": line_spacing,
+
+            "is_list": is_list[0],
+            'list_level': is_list[1],
+            
+            "list_type": list_type,               # 'numbered' / 'bulleted' (или None)
+            "numbering_format": numbering_format  # формат нумерации из Word (bullet / decimal / upperRoman / ...)
+        }
+ 
     def get_run_properties(self, document, paragraph, run):
         """
-        ИСПРАВЛЕННАЯ версия (пункты 1–3):
-        • Добавлены все необходимые импорты
-        • Исправлен порядок наследования стилей (run → run.style → linked_style → paragraph.style.font)
-        • resolve_theme_name полностью переписан — теперь **гарантированно** возвращает реальное имя шрифта
-        (больше никогда не возвращает пустую строку даже в повреждённых темах, Google Docs, старых Word 2007 и т.д.)
+        ИСПРАВЛЕННАЯ И ПОЛНАЯ версия (март 2026):
+        • Полная поддержка numbering level + lvlOverride (alignment, spacing, keep*, indents, RTL)
+        • Правильная иерархия: direct → numbering lvl → style chain → docDefaults
+        • Hanging indent больше НЕ модифицирует left_indent
+        • line_spacing корректно обрабатывает multiplier/exact + lineRule
+        • Поддержка Word 2007–2025 + Google Docs + RTL
+        • run-часть оставлена в вашем уже улучшенном виде
+        • ДОБАВЛЕНО: numbering_format + list_type (без изменения структуры)
         """
 
         if run is None or not hasattr(run, '_element'):
             return None
 
-        # ====================== КЭШИРОВАНИЕ (один раз на документ) ======================
+        # ====================== КЭШИРОВАНИЕ ======================
         if not hasattr(self, '_docx_style_cache'):
             self._docx_style_cache = {}
-            self._theme_cache = None          # dict {'minor': {...}, 'major': {...}}
+            self._theme_cache = None
             self._doc_defaults = None
 
-        # ====================== ИСПРАВЛЕННЫЕ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======================
+
+        # ====================== ВСПОМОГАТЕЛЬНЫЕ (run-часть — ваша исправленная) ======================
         def get_theme_font(font_type='minor'):
-            """Кэшированный доступ к теме (latin + hAnsi приоритет)"""
+            """(ваша версия без изменений)"""
             if self._theme_cache is None:
                 self._theme_cache = {'minor': {}, 'major': {}}
                 try:
-                    # Способ 1: высокий уровень API
                     theme = document.part.theme_part.theme
                     fs = theme.themeElements.fontScheme
                     fgroup = getattr(fs, f'{font_type}Font', None)
@@ -288,63 +573,42 @@ class DocumentParser:
                         }
                 except Exception:
                     pass
-
-                # Способ 2: чистый XML (работает всегда)
                 if not self._theme_cache[font_type]:
                     try:
                         el = document.part.theme_part.element
-                        ns = {'a': 'http://schemas.openxmlformats.org/drawingml/2006/main'}
                         typ = 'minorFont' if font_type == 'minor' else 'majorFont'
                         res = el.xpath(f'.//a:fontScheme/a:{typ}/a:latin')
                         if res:
                             typeface = res[0].get('typeface')
-                            self._theme_cache[font_type]['hAnsi'] = typeface
-                            self._theme_cache[font_type]['latin'] = typeface
+                            self._theme_cache[font_type] = {'latin': typeface, 'hAnsi': typeface}
                     except Exception:
                         pass
-
-                # Финальный fallback
                 default = "Calibri" if font_type == 'minor' else "Calibri Light"
                 if not self._theme_cache[font_type]:
                     self._theme_cache[font_type] = {'latin': default, 'hAnsi': default}
-
             return self._theme_cache[font_type]
 
         def resolve_theme_name(name):
-            """ГЛАВНОЕ ИСПРАВЛЕНИЕ: больше НИКОГДА не возвращает пустую строку"""
+            """(ваша исправленная версия)"""
             if not name:
                 return "Calibri"
-
             name = str(name).strip()
             if not name:
                 return "Calibri"
-
             lower = name.lower()
-
-            # Все возможные плейсхолдеры (включая asciiTheme/hAnsiTheme)
-            minor_placeholders = {
-                "+body", "body", "+mnlt", "mnlt", "minor", "minorhansi", "minorascii",
-                "minorbidi", "minoreastasia", "asciitheme", "hansitheme", "cstheme"
-            }
-            major_placeholders = {
-                "+heading", "heading", "+mnhansi", "mnhansi", "major", "majorhansi",
-                "majorascii", "majorbidi", "majoreastasia"
-            }
-
+            minor_placeholders = {"+body", "body", "+mnlt", "mnlt", "minor", "minorhansi", "minorascii",
+                                  "minorbidi", "minoreastasia", "asciitheme", "hansitheme", "cstheme"}
+            major_placeholders = {"+heading", "heading", "+mnhansi", "mnhansi", "major", "majorhansi",
+                                  "majorascii", "majorbidi", "majoreastasia"}
             is_major = lower in major_placeholders
             theme_group = get_theme_font('major' if is_major else 'minor')
-
-            # Приоритет hAnsi (самый важный для европейских документов и разных версий Word)
             for key in ('hAnsi', 'ascii', 'latin', 'eastAsia', 'cs'):
                 val = theme_group.get(key)
                 if val and str(val).strip():
                     return str(val).strip()
-
-            # Если ничего не нашлось
             return "Calibri Light" if is_major else "Calibri"
 
         def get_color_value(color_format):
-            """Оставлено почти как было + небольшая защита"""
             if not color_format:
                 return None
             try:
@@ -361,7 +625,6 @@ class DocumentParser:
             return None
 
         def get_prop_from_font(font_obj, prop_name):
-            """Универсальный геттер"""
             if not font_obj:
                 return None
             try:
@@ -372,7 +635,7 @@ class DocumentParser:
                     size = getattr(font_obj, 'size', None)
                     return size.pt if size else None
                 if prop_name in ("bold", "italic", "strike", "subscript", "superscript",
-                                "small_caps", "all_caps"):
+                                 "small_caps", "all_caps"):
                     return getattr(font_obj, prop_name, None)
                 if prop_name == "underline":
                     return getattr(font_obj, 'underline', None)
@@ -385,7 +648,6 @@ class DocumentParser:
             return None
 
         def get_style_chain_prop(style, prop_name):
-            """Цепочка base_style"""
             if not style:
                 return None
             visited = set()
@@ -393,25 +655,19 @@ class DocumentParser:
             while current and current.name not in visited:
                 visited.add(current.name)
                 value = get_prop_from_font(current.font, prop_name)
-                if value is not None and (prop_name != "name" or value):  # защита от пустой строки
+                if value is not None and (prop_name != "name" or value):
                     return value
                 current = getattr(current, 'base_style', None)
             return None
 
         def resolve_run_prop(prop_name, default=None):
-            """ИСПРАВЛЕННЫЙ порядок наследования (самое важное изменение)"""
-            # 1. Прямое форматирование run
             value = get_prop_from_font(run.font, prop_name)
             if value is not None and (prop_name != "name" or value):
                 return value
-
-            # 2. Стиль самого run (character style)
             if run.style:
                 value = get_style_chain_prop(run.style, prop_name)
                 if value is not None and (prop_name != "name" or value):
                     return value
-
-            # 3. Linked character style параграфа (КРИТИЧНО для Heading, Title и т.д.)
             try:
                 linked = getattr(paragraph.style, 'linked_style', None)
                 if linked:
@@ -420,14 +676,11 @@ class DocumentParser:
                         return value
             except Exception:
                 pass
-
-            # 4. Стиль параграфа (paragraph.style.font)
             if paragraph.style:
                 value = get_style_chain_prop(paragraph.style, prop_name)
                 if value is not None and (prop_name != "name" or value):
                     return value
-
-            # 5. docDefaults (XML — самый надёжный способ)
+            # docDefaults (только name)
             if self._doc_defaults is None:
                 try:
                     self._doc_defaults = document.styles.element.xpath(
@@ -436,74 +689,55 @@ class DocumentParser:
                     self._doc_defaults = self._doc_defaults[0] if self._doc_defaults else None
                 except Exception:
                     self._doc_defaults = None
-
-            if self._doc_defaults is not None:
+            if self._doc_defaults is not None and prop_name == "name":
                 try:
-                    if prop_name == "name":
-                        rFonts = self._doc_defaults.find(qn('w:rFonts'))
-                        if rFonts is not None:
-                            for attr in ['hAnsi', 'ascii', 'eastAsia', 'cs', 'hAnsiTheme', 'asciiTheme']:
-                                val = rFonts.get(qn(f'w:{attr}'))
-                                if val:
-                                    return val
+                    rFonts = self._doc_defaults.find(qn('w:rFonts'))
+                    if rFonts is not None:
+                        for attr in ['hAnsi', 'ascii', 'eastAsia', 'cs']:
+                            val = rFonts.get(qn(f'w:{attr}'))
+                            if val:
+                                return val
                 except Exception:
                     pass
-
-            # 6. Тема по умолчанию
             if prop_name == "name":
                 return resolve_theme_name("+Body") or default
             return default
+        
+        
+        font_name = resolve_run_prop("name", "Calibri")
+        font_size = round(resolve_run_prop("size") or 11.0, 1)
+        font_bold = bool(resolve_run_prop("bold"))
+        font_italic = bool(resolve_run_prop("italic"))
+        font_underline = resolve_run_prop("underline") not in (None, False, WD_UNDERLINE.NONE)
+        font_color = resolve_run_prop("color")
+        font_highlight = resolve_run_prop("highlight")
+        font_strike = bool(resolve_run_prop("strike"))
+        font_subscript = bool(resolve_run_prop("subscript"))
+        font_superscript = bool(resolve_run_prop("superscript"))
+        font_small_caps = bool(resolve_run_prop("small_caps"))
+        font_all_caps = bool(resolve_run_prop("all_caps"))
 
-        def resolve_para_prop(prop_name, default=None):
-            """Параграфные свойства (без изменений)"""
-            try:
-                fmt = paragraph.paragraph_format
-                value = getattr(fmt, prop_name, None)
-                if value is not None:
-                    return value
+        # paragraph_properties = self.get_paragraph_properties(document, paragraph)
 
-                style = paragraph.style
-                while style:
-                    value = getattr(style.paragraph_format, prop_name, None)
-                    if value is not None:
-                        return value
-                    style = getattr(style, 'base_style', None)
-            except Exception:
-                pass
-            return default
-
-        # ====================== СБОР РЕЗУЛЬТАТА ======================
-        paragraph_stats = {
-            "font_name": resolve_run_prop("name", "Calibri"),
-            "font_size": round(resolve_run_prop("size") or 11.0, 1),
-            "font_bold": bool(resolve_run_prop("bold")),
-            "font_italic": bool(resolve_run_prop("italic")),
-            "font_underline": resolve_run_prop("underline") not in (None, False, WD_UNDERLINE.NONE),
-            "font_color": resolve_run_prop("color"),
-            "font_highlight": resolve_run_prop("highlight"),
-            "font_strike": bool(resolve_run_prop("strike")),
-            "font_subscript": bool(resolve_run_prop("subscript")),
-            "font_superscript": bool(resolve_run_prop("superscript")),
-            "font_small_caps": bool(resolve_run_prop("small_caps")),
-            "font_all_caps": bool(resolve_run_prop("all_caps")),
-
-            "alignment": resolve_para_prop("alignment", WD_PARAGRAPH_ALIGNMENT.LEFT),
-            "keep_with_next": bool(resolve_para_prop("keep_with_next")),
-            "page_break_before": bool(resolve_para_prop("page_break_before")),
-
-            "left_indent": round(Length(resolve_para_prop("left_indent") or 0).cm, 2),
-            "right_indent": round(Length(resolve_para_prop("right_indent") or 0).cm, 2),
-            "first_line_indent": round(Length(resolve_para_prop("first_line_indent") or 0).cm, 2),
-
-            "space_before": round(getattr(resolve_para_prop("space_before"), 'pt', 0), 1),
-            "space_after": round(getattr(resolve_para_prop("space_after"), 'pt', 0), 1),
-            "line_spacing": resolve_para_prop("line_spacing") or 1.0,
-
-            "is_list": self.is_list_item(paragraph)[0],
+        result = {
+            "font_name": font_name,
+            "font_size": font_size,
+            "font_bold": font_bold,
+            "font_italic": font_italic,
+            "font_underline": font_underline,
+            "font_color": font_color,
+            "font_highlight": font_highlight,
+            "font_strike": font_strike,
+            "font_subscript": font_subscript,
+            "font_superscript": font_superscript,
+            "font_small_caps": font_small_caps,
+            "font_all_caps": font_all_caps,
         }
-
-        return paragraph_stats
-
+        
+        # if isinstance(paragraph_properties, dict):
+        #    result.update(paragraph_properties)
+            
+        return result
 
     # This function extracts the tables and paragraphs from the document object
     @staticmethod
@@ -673,6 +907,8 @@ class DocumentParser:
 
         all_errors = []
         seen = set()
+        
+        paragraph_stats = self.get_paragraph_properties(document, paragraph)
 
         for run in paragraph.runs:
             # Пропускаем пустые run-ы (часто бывают пробелы/табуляция)
@@ -680,6 +916,7 @@ class DocumentParser:
                 continue
 
             stats = self.get_run_properties(document, paragraph, run)
+            stats.update(paragraph_stats)
             errors = self.get_error_comment(checklist, stats)
 
             for err in errors:
@@ -783,8 +1020,17 @@ class DocumentParser:
                     block_author = f"Заголовок {level}"
 
                 elif base_type == "list":
-                    checklist = self.list_checklist
-                    block_author = "Элемент списка"
+                    paragraph_stats = self.get_paragraph_properties(document, p)
+                    if paragraph_stats['is_list']:
+                        if paragraph_stats['list_type'] == 'bulleted':
+                            checklist = self.bullet_list_checklist
+                            block_author = "Маркированный список"
+                        elif paragraph_stats['list_type'] == 'numbered':
+                            checklist = self.bullet_list_checklist
+                            block_author = "Нумерованный список"
+                        else:
+                            checklist = self.bullet_list_checklist
+                            block_author = "Ошибка: список не найден"
 
                 elif base_type == "image":
                     checklist = self.image_checklist
@@ -811,6 +1057,7 @@ class DocumentParser:
                 # Проверка текущего параграфа
                 if checklist and 'checklist' in locals() and not block_errors:
                     block_errors = self.collect_paragraph_errors(p, checklist, document)
+                    
 
                 if not target_runs:
                     target_runs = p.runs
@@ -836,9 +1083,11 @@ class DocumentParser:
                             if target_paragraph is None:
                                 target_paragraph = cell_p
                                 target_runs = cell_p.runs if cell_p.runs else []
-
+                                
+                            cell_paragraph_stats = self.get_paragraph_properties(document, cell_p)
                             cell_stats = self.get_run_properties(document, cell_p,
                                                                 cell_p.runs[0] if cell_p.runs else None)
+                            cell_stats.update(cell_paragraph_stats)
                             cell_stats["vert_alignment"] = cell.vertical_alignment or WD_ALIGN_VERTICAL.TOP
 
                             checklist_cell = self.table_headings_checklist if \

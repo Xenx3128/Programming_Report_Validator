@@ -341,10 +341,10 @@ class MainWindow(QMainWindow):
             self.getSettings()
             self.getOptionalSettings()
             parser = DocumentParser()
-            parser.set_settings(self.text_checklist, self.heading1_checklist, self.heading2_checklist,
+            '''parser.set_settings(self.text_checklist, self.heading1_checklist, self.heading2_checklist,
                                 self.heading3_checklist, self.table_title_checklist, self.table_heading_checklist,
                                 self.table_checklist, self.list_checklist, self.page_checklist, self.picture_checklist,
-                                self.title_picture_checklist)
+                                self.title_picture_checklist)'''
             parser.set_enable_optional_settings(self.enable_optional_settings)
 
             self.ui.LEResLine.setText(f"Проверено файлов: 0")
@@ -524,6 +524,8 @@ class MainWindow(QMainWindow):
             "left_indent_mod": float(self.SettingsWindow.ui.LEListMarginModify.text()),
             "first_line_indent": -float(self.SettingsWindow.ui.LEListLedge.text()),
         }
+        if self.text_checklist:
+            self.list_checklist.update(self.text_checklist)
 
     def getTableSettings(self):
         alignment = 0
