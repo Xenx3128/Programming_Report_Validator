@@ -30,6 +30,19 @@ import inspect
 import numbers
 
 
+class PCommentGeneral:
+    def __init__(self, topic=None, correct=None, received=None):
+        self.topic = topic
+        self.correct = correct
+        self.received = received
+
+
+class PCommentSpecial:
+    def __init__(self, topic=None, text=None):
+        self.topic = topic
+        self.text = text
+        
+    
 class BaseChecklist:
     def set_settings(self, settings: dict):
         for par, value in settings.items():
@@ -196,44 +209,49 @@ class DocumentParser:
                 if key == 'format_regex':
                     comparison_res = re.fullmatch(fr'{REGEX_TRANSFORM[val]}', received[key])
                     if not comparison_res:
-                        comment = [PARAM_TO_COMMENT[key], val, received[key]]
-                        comments.append(comment)
+
+                        comments.append(PCommentGeneral(PARAM_TO_COMMENT[key], val, received[key]))
                         continue
-                elif "left_indent_base" in expected and "is_list" in received and received["list_level"] > 0 and key == "left_indent":
+                if "left_indent_base" in expected and "is_list" in received and received["list_level"] > 0 and key == "left_indent":
                     expected_indent = expected["left_indent_base"] + expected["left_indent_mod"] * (received["list_level"] - 1)
                     comparison_res = abs(received["left_indent"] - expected_indent) <= epsilon
                     if not comparison_res:
-                        comment = [PARAM_TO_COMMENT[key], expected_indent, received[key]]
-                        comments.append(comment)
+                        comments.append(PCommentGeneral(PARAM_TO_COMMENT[key], expected_indent, received[key]))
                         continue
+                
+                if isinstance(val, bool):
+                    if received[key] == True:
+                        comparison_res = val == True
+                    else:
+                        comparison_res = val in (False, None)
+                elif isinstance(val, numbers.Number) and isinstance(received[key], numbers.Number):
+                    comparison_res = abs(val - received[key]) <= epsilon
                 else:
-                    if isinstance(val, bool):
-                        if received[key] == True:
-                            comparison_res = val == True
-                        else:
-                            comparison_res = val in (False, None)
-                    elif isinstance(val, numbers.Number) and isinstance(received[key], numbers.Number):
-                        comparison_res = abs(val - received[key]) <= epsilon
-                    else:
-                        comparison_res = val == received[key]
+                    comparison_res = val == received[key]
                 if not comparison_res:
-                    comment = [PARAM_TO_COMMENT[key]]
-                    # У выравниваний значения приравниваются к 0..3, поэтому нужен костыль
-                    if key == "alignment":
-                        comment += [ALIGNMENT_TO_COMMENT[val], ALIGNMENT_TO_COMMENT[received[key]]]
-                    elif key == "vert_alignment":
-                        comment += [VERT_ALIGNMENT_TO_COMMENT[val], VERT_ALIGNMENT_TO_COMMENT[received[key]]]
-                    elif key == "orientation":
-                        comment += [ORIENTATION_TO_COMMENT[val], ORIENTATION_TO_COMMENT[received[key]]]
+                    if key in SPECIAL_COMMENTS:
+                        comment = PCommentSpecial(topic=PARAM_TO_COMMENT[key], text=SPECIAL_COMMENTS[key])
                     else:
-                        if val is None or isinstance(val, bool):
-                            comment += [VAR_TO_COMMENT[val]]
+                        comment = PCommentGeneral(topic=PARAM_TO_COMMENT[key])
+                        # У выравниваний значения приравниваются к 0..3 через константы
+                        if key == "alignment":
+                            comment.correct = ALIGNMENT_TO_COMMENT[val]
+                            comment.received = ALIGNMENT_TO_COMMENT[received[key]]
+                        elif key == "vert_alignment":
+                            comment.correct = VERT_ALIGNMENT_TO_COMMENT[val]
+                            comment.received = VERT_ALIGNMENT_TO_COMMENT[received[key]] 
+                        elif key == "orientation":
+                            comment.correct = ORIENTATION_TO_COMMENT[val]
+                            comment.received = ORIENTATION_TO_COMMENT[received[key]]
                         else:
-                            comment += [val]
-                        if received is None or isinstance(received[key], bool):
-                            comment += [VAR_TO_COMMENT[received[key]]]
-                        else:
-                            comment += [received[key]]
+                            if val is None or isinstance(val, bool):
+                                comment.correct = VAR_TO_COMMENT[val] 
+                            else:
+                                comment.correct = val
+                            if received is None or isinstance(received[key], bool):
+                                comment.received = VAR_TO_COMMENT[received[key]]
+                            else:
+                                comment.received = received[key]
                     comments.append(comment)
         return comments
     
@@ -249,25 +267,19 @@ class DocumentParser:
                 cmt_para = comment.add_paragraph()
                 cmt_para.add_run("Выведена только первая ошибка в каждой категории\n").bold = True 
             for cmt in comments:
-                parameter, expected_value, received_value = cmt
-                cmt_para = comment.add_paragraph()
-                cmt_para.add_run(f"{parameter}: ").bold = True 
-                cmt_para.add_run(f"{received_value} | ")
-                cmt_para.add_run(f"({expected_value}).")
+                if isinstance(cmt, PCommentGeneral):
+                    cmt_para = comment.add_paragraph()
+                    cmt_para.add_run(f"{cmt.topic}: ").bold = True 
+                    cmt_para.add_run(f"{cmt.received} | ")
+                    cmt_para.add_run(f"({cmt.correct}).")
+                elif isinstance(cmt, PCommentSpecial):
+                    cmt_para = comment.add_paragraph()
+                    cmt_para.add_run(f"{cmt.topic}: ").bold = True 
+                    cmt_para.add_run(f"{cmt.text}")
             return comment
 
  
     def get_paragraph_properties(self, document, paragraph):
-        """
-        ИСПРАВЛЕННАЯ И ПОЛНАЯ версия (март 2026):
-        • Полная поддержка numbering level + lvlOverride (alignment, spacing, keep*, indents, RTL)
-        • Правильная иерархия: direct → numbering lvl → style chain → docDefaults
-        • Hanging indent больше НЕ модифицирует left_indent
-        • line_spacing корректно обрабатывает multiplier/exact + lineRule
-        • Поддержка Word 2007–2025 + Google Docs + RTL
-        • run-часть оставлена в вашем уже улучшенном виде
-        • ДОБАВЛЕНО: numbering_format + list_type (без изменения структуры)
-        """
 
         if paragraph is None:
             return None
@@ -284,13 +296,7 @@ class DocumentParser:
         
         
         def get_numbering_properties(paragraph, document):
-            """
-            Извлекает свойства нумерации, учитывая:
-            - прямое форматирование параграфа
-            - стиль параграфа (и всю цепочку base_style)
-            - lvlOverride → abstractNum
-            Возвращает {} если нумерации нет
-            """
+
             props = {}
 
             def extract_numPr_from_pPr(pPr_element):
@@ -309,7 +315,7 @@ class DocumentParser:
             # ─── 1. Прямое форматирование параграфа ───
             pPr_direct = paragraph._element.find(qn('w:pPr'))
             ilvl, num_id = extract_numPr_from_pPr(pPr_direct)
-            if num_id is not None:
+            if num_id:
                 # нашли — используем это как самое приоритетное
                 pass
             else:
@@ -329,7 +335,7 @@ class DocumentParser:
                         pass
                     style = style.base_style
 
-            if num_id is None:
+            if not num_id:
                 return props  # нумерации нигде нет
 
             # ─── Дальше — общий код парсинга numbering.xml ───
@@ -384,7 +390,7 @@ class DocumentParser:
                     for side in ['left', 'start', 'right', 'end']:
                         val = ind.get(qn(f'w:{side}'))
                         if val is not None:
-                            props[f'{side}_indent'] = Length(twips_to_emu(int(val)))  # или twips_to_emu(int(val))
+                            props[f'{side}_indent'] = Length(twips_to_emu(int(val)))
 
                     hanging = ind.get(qn('w:hanging'))
                     first_line = ind.get(qn('w:firstLine'))
@@ -428,12 +434,7 @@ class DocumentParser:
             return props
 
         def resolve_para_prop(prop_name, default=None):
-            """
-            Иерархия:
-            1. Прямое форматирование параграфа
-            2. Свойства из нумерации (direct или из стиля)
-            3. Свойства стиля параграфа (paragraph_format)
-            """
+
             # ─── 1. Прямое ───
             try:
                 fmt = paragraph.paragraph_format
@@ -474,6 +475,9 @@ class DocumentParser:
         # ====================== РАЗРЕШЕНИЕ СВОЙСТВ ======================
         
         is_list = self.is_list_item(paragraph)
+        
+        if is_list[0]:
+            pass
         
         # ─── ДОБАВЛЕНО (минимально): получаем расширенные свойства списка ───
         numbering_props = get_numbering_properties(paragraph, document)
@@ -534,16 +538,6 @@ class DocumentParser:
         }
  
     def get_run_properties(self, document, paragraph, run):
-        """
-        ИСПРАВЛЕННАЯ И ПОЛНАЯ версия (март 2026):
-        • Полная поддержка numbering level + lvlOverride (alignment, spacing, keep*, indents, RTL)
-        • Правильная иерархия: direct → numbering lvl → style chain → docDefaults
-        • Hanging indent больше НЕ модифицирует left_indent
-        • line_spacing корректно обрабатывает multiplier/exact + lineRule
-        • Поддержка Word 2007–2025 + Google Docs + RTL
-        • run-часть оставлена в вашем уже улучшенном виде
-        • ДОБАВЛЕНО: numbering_format + list_type (без изменения структуры)
-        """
 
         if run is None or not hasattr(run, '_element'):
             return None
@@ -830,7 +824,7 @@ class DocumentParser:
         outline = paragraph._p.xpath('./w:pPr/w:outlineLvl/@w:val')
         if outline:
             try:
-                lvl = int(outline[0])
+                lvl = int(outline[0]) + 1
                 return lvl if 1 <= lvl <= 9 else None
             except (ValueError, IndexError):
                 pass
@@ -918,11 +912,11 @@ class DocumentParser:
             stats = self.get_run_properties(document, paragraph, run)
             stats.update(paragraph_stats)
             errors = self.get_error_comment(checklist, stats)
-
+            
             for err in errors:
-                err_key = tuple(str(x) for x in err)  # дедупликация
-                if err_key not in seen:
-                    seen.add(err_key)
+                topic = err.topic
+                if topic not in seen:
+                    seen.add(topic)
                     all_errors.append(err)
 
         return all_errors
@@ -1087,6 +1081,8 @@ class DocumentParser:
                             cell_paragraph_stats = self.get_paragraph_properties(document, cell_p)
                             cell_stats = self.get_run_properties(document, cell_p,
                                                                 cell_p.runs[0] if cell_p.runs else None)
+                            if not cell_stats:
+                                continue
                             cell_stats.update(cell_paragraph_stats)
                             cell_stats["vert_alignment"] = cell.vertical_alignment or WD_ALIGN_VERTICAL.TOP
 
@@ -1105,9 +1101,9 @@ class DocumentParser:
                 current_errors_filtered = []
                 seen = set()
                 for err in current_errors:
-                    err_key = tuple(str(x) for x in err)
-                    if err_key not in seen:
-                        seen.add(err_key)
+                    topic = err.topic
+                    if topic not in seen:
+                        seen.add(topic)
                         current_errors_filtered.append(err)
                 self.create_comment(document, runs_to_use, current_author, current_errors_filtered)
                 comment_count += 1
@@ -1131,9 +1127,9 @@ class DocumentParser:
             current_errors_filtered = []
             seen = set()
             for err in current_errors:
-                err_key = tuple(str(x) for x in err)
-                if err_key not in seen:
-                    seen.add(err_key)
+                topic = err.topic
+                if topic not in seen:
+                    seen.add(topic)
                     current_errors_filtered.append(err)
             self.create_comment(document, runs_to_use, current_author, current_errors_filtered)
             comment_count += 1

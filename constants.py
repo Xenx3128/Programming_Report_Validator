@@ -23,7 +23,7 @@ REGEX_TRANSFORM = {
 }
 
 PARAM_TO_COMMENT = {
-    "format_regex": "Формат",
+    "format_regex": "Формат названия",
     "font_name": "Тип шрифта",
     "font_size": "Размер шрифта",
     "font_bald": "Полужирный",
@@ -47,6 +47,12 @@ PARAM_TO_COMMENT = {
     "left_margin": "Левое поле",
     "right_margin": "Правое поле",
     "orientation": "Ориентация",
+    "numbering_format": "Формат списка"
+}
+
+SPECIAL_COMMENTS = {
+    "numbering_format": "Возможно, некорректный формат",
+    "format_regex": "Возможно, некорректный формат названия"
 }
 VAR_TO_COMMENT = {
     True: "Да",
