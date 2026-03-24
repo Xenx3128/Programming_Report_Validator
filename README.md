@@ -1,33 +1,39 @@
-# About project
+# Проверка оформления DOCX
 
-Python-based group project for automated formatting verification of DOCX documents.
+**Автоматическая проверка оформления документов Microsoft Word (.docx)** по заданным критериям с добавлением комментариев. Учебный проект, часть экосистемы для дисциплины "Программирование".
 
-This group project is a desktop application designed to automatically check the formatting of DOCX documents (e.g., course papers and dissertations) against predefined formatting rules. It was developed to streamline the process of ensuring compliance with academic formatting standards.
+Проект состоит из двух частей:
+- **FastAPI-сервер** — удобный веб-интерфейс для одиночной и массовой проверки документов.
+- **Ядро (DocumentParser)** — мощный парсер на базе `python-docx`, который анализирует форматирование абзацев, заголовков, списков, таблиц, рисунков и полей документа.
 
-## Built With
+## Возможности
 
-- [bayoo-docx](https://pypi.org/project/bayoo-docx/) - DOCX document manipulation
-- [PyQt5](https://www.riverbankcomputing.com/software/pyqt/) - GUI framework
-- [multiprocess](https://pypi.org/project/multiprocess/) - Multiprocessing utilities
+- Проверка оформления:
+  - Обычных абзацев
+  - Заголовков 1–3 уровней (и выше)
+  - Маркированных и нумерованных списков
+  - Таблиц (включая заголовки строк/столбцов)
+  - Рисунков и их подписей
+  - Абзацев перед списками и после таблиц
+  - Полей страницы (отступы, ориентация)
+- Гибкая настройка критериев через JSON
+- Добавление понятных комментариев прямо в документ Word
+- Одиночная проверка (`/check-docx`)
+- Массовая проверка до 20 файлов за раз (`/check-docx-batch`)
+- Скачивание проверенных документов
+- Удобная демо-страница (`/demo`)
 
-## Prerequisites
+## Технологии
 
-- [Python 3](https://www.python.org/downloads/) - Ensure Python 3.6 or higher is installed
+- **FastAPI** + **Uvicorn**
+- **python-docx** (1.2.0+)
+- **Pydantic** v2
+- Python 3.9+
 
-## Installation
+## Установка и запуск
 
-1. Clone the repo
-   ```bash
-   git clone https://github.com/Asklit/CourseProjectPython
-   cd CourseProjectPython
-   ```
+### 1. Клонируйте репозиторий
 
-2. Install required packages
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Run the application
-   ```bash
-   python main.py
-   ```
+```bash
+git clone <ваш-репозиторий>
+cd docx-checker
