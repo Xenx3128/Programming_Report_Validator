@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Проверка оформления DOCX — Полное меню настроек</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css">
+    <style>
+        body { font-family: 'Segoe UI', system-ui, sans-serif; }
+        .file-list { max-height: 220px; overflow-y: auto; }
+        details { border-radius: 16px; }
+        summary { cursor: pointer; }
+        .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
+        .checkbox-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.8rem; }
+        .subheader { @apply text-sm font-semibold text-gray-600 mt-6 mb-3 border-b pb-1; }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<div class="max-w-7xl mx-auto p-8">
+    <h1 class="text-4xl font-bold text-center text-gray-800 mb-2">Проверка оформления DOCX</h1>
+
+    <!-- Выбор файлов -->
+    <div class="bg-white rounded-3xl shadow-xl p-8 mb-8">
+        <div class="flex items-center gap-3 mb-6">
+            <i class="fa-solid fa-folder-open text-3xl text-blue-600"></i>
+            <h2 class="text-2xl font-semibold">Выбор документов</h2>
+        </div>
+        <div class="border-2 border-dashed border-blue-300 rounded-3xl p-12 text-center hover:border-blue-500 transition-colors">
+            <input type="file" id="fileInput" multiple accept=".docx" class="hidden">
+            <button onclick="triggerFileInput()" 
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-12 py-5 rounded-3xl text-xl flex items-center gap-4 mx-auto">
+                <i class="fa-solid fa-file-upload text-2xl"></i>
+                Выбрать .docx файлы
+            </button>
+            <p class="text-gray-500 mt-4">Можно выбрать несколько файлов одновременно</p>
+        </div>
+
+        <div id="selectedFiles" class="file-list mt-8 hidden">
+            <h3 class="font-medium text-gray-700 mb-4">Выбранные файлы:</h3>
+            <ul id="fileList" class="space-y-3"></ul>
+        </div>
+    </div>
+
+    <!-- Кнопка проверки -->
+    <button onclick="startCheck()" id="checkButton"
+            class="mt-10 w-full bg-gradient-to-r from-blue-600 to-emerald-600 hover:from-blue-700 hover:to-emerald-700 text-white text-2xl font-semibold py-7 rounded-3xl shadow-2xl flex items-center justify-center gap-4 disabled:opacity-50">
+        <i class="fa-solid fa-check-circle text-3xl"></i>
+        <span>Проверить все выбранные документы</span>
+    </button>
+    <br>
+    <!-- Результаты -->
+    <div id="resultsSection" class="hidden mt-12 bg-white rounded-3xl shadow-2xl p-8">
+        <h2 class="text-3xl font-bold mb-8">Результаты проверки</h2>
+        <table class="w-full">
+            <thead>
+                <tr class="border-b">
+                    <th class="text-left py-4">Файл</th>
+                    <th class="text-center py-4">Ошибок</th>
+                    <th class="text-right py-4">Действие</th>
+                </tr>
+            </thead>
+            <tbody id="resultsBody" class="divide-y"></tbody>
+        </table>
+        <div id="totalStats" class="mt-8 text-center text-lg"></div>
+        <br>
+    </div>
+
+    <!-- Настройки -->
+    <div class="bg-white rounded-3xl shadow-xl p-8">
+        <div class="flex justify-between items-center mb-8">
+            <div class="flex items-center gap-3">
+                <i class="fa-solid fa-sliders text-3xl"></i>
+                <h2 class="text-2xl font-semibold">Критерии проверки</h2>
+            </div>
+            <button onclick="resetAllToDefaults()" 
+                    class="bg-emerald-100 hover:bg-emerald-200 text-emerald-700 px-8 py-3 rounded-3xl font-medium flex items-center gap-2">
+                <i class="fa-solid fa-rotate-right"></i> Сбросить все к значениям по умолчанию
+            </button>
+        </div>
+
+        <div class="space-y-10" id="settingsForm">
+
+            <!-- ==================== Абзац ==================== -->
+            <details open>
+                <summary class="px-6 py-5 text-lg font-medium bg-gray-50 rounded-3xl">Абзац</summary>
+                <div class="px-6 pb-8 pt-4">
+                    <div class="subheader">Шрифт и размер</div>
+                    <div class="field-grid">
+                        <div><label class="block text-xs font-medium mb-1">Шрифт</label><input data-check-key="text_check.font_name" type="text" value="Times New Roman" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        <div><label class="block text-xs font-medium mb-1">Размер шрифта</label><input data-check-key="text_check.font_size" type="number" step="0.1" value="13.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                    </div>
+
+                    <div class="subheader">Стиль текста</div>
+                    <div class="checkbox-grid">
+                        <label class="flex items-center gap-2"><input data-check-key="text_check.font_bald" type="checkbox" checked> Жирный</label>
+                        <label class="flex items-center gap-2"><input data-check-key="text_check.font_italic" type="checkbox"> Курсив</label>
+                        <label class="flex items-center gap-2"><input data-check-key="text_check.font_underline" type="checkbox"> Подчёркивание</label>
+                    </div>
+
+                    <div class="subheader">Цвета</div>
+                    <div class="field-grid">
+                        <div><label class="block text-xs font-medium mb-1">Цвет шрифта (False = любой)</label><input data-check-key="text_check.font_color" type="text" value="False" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        <div><label class="block text-xs font-medium mb-1">Цвет фона (False = любой)</label><input data-check-key="text_check.font_back_color" type="text" value="False" class="w-full px-4 py-3 border rounded-2xl"></div>
+                    </div>
+
+                    <div class="subheader">Выравнивание и отступы</div>
+                    <div class="field-grid">
+                        <div>
+                            <label class="block text-xs font-medium mb-1">Выравнивание</label>
+                            <select data-check-key="text_check.alignment" class="w-full px-4 py-3 border rounded-2xl">
+                                <option value="3">По ширине (3)</option>
+                                <option value="0">По левому краю (0)</option>
+                                <option value="1">По центру (1)</option>
+                                <option value="2">По правому краю (2)</option>
+                            </select>
+                        </div>
+                        <div><label class="block text-xs font-medium mb-1">Отступ слева (см)</label><input data-check-key="text_check.left_indent" type="number" step="0.01" value="0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        <div><label class="block text-xs font-medium mb-1">Отступ справа (см)</label><input data-check-key="text_check.right_indent" type="number" step="0.01" value="0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        <div><label class="block text-xs font-medium mb-1">Отступ первой строки (см)</label><input data-check-key="text_check.first_line_indent" type="number" step="0.01" value="1.25" class="w-full px-4 py-3 border rounded-2xl"></div>
+                    </div>
+
+                    <div class="subheader">Интервалы и поведение</div>
+                    <div class="field-grid">
+                        <div><label class="block text-xs font-medium mb-1">Отступ перед (pt)</label><input data-check-key="text_check.space_before" type="number" step="0.1" value="0.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        <div><label class="block text-xs font-medium mb-1">Отступ после (pt)</label><input data-check-key="text_check.space_after" type="number" step="0.1" value="0.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        <div><label class="block text-xs font-medium mb-1">Междустрочный интервал</label><input data-check-key="text_check.line_spacing" type="number" step="0.1" value="1.5" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        <label class="flex items-center gap-2"><input data-check-key="text_check.keep_with_next" type="checkbox"> Не отрывать от следующего</label>
+                        <label class="flex items-center gap-2"><input data-check-key="text_check.page_break_before" type="checkbox"> Разрыв страницы перед абзацем</label>
+                    </div>
+                </div>
+            </details>
+
+            <!-- ==================== Заголовки ==================== -->
+            <details>
+                <summary class="px-6 py-5 text-lg font-medium bg-gray-50 rounded-3xl">Заголовки</summary>
+                <div class="px-6 pb-8 pt-4 space-y-12">
+                    <div>
+                        <h4 class="font-semibold mb-4 text-lg">Заголовок 1</h4>
+                        <div class="field-grid">
+                            <div><label>Шрифт</label><input data-check-key="h1_check.font_name" type="text" value="Times New Roman" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <div><label>Размер</label><input data-check-key="h1_check.font_size" type="number" step="0.1" value="16.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <label><input data-check-key="h1_check.font_bald" type="checkbox" checked> Жирный</label>
+                            <div><label>Выравнивание</label><select data-check-key="h1_check.alignment" class="w-full px-4 py-3 border rounded-2xl"><option value="1">По центру</option></select></div>
+                            <div><label>Отступ перед (pt)</label><input data-check-key="h1_check.space_before" type="number" step="0.1" value="0.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <div><label>Отступ после (pt)</label><input data-check-key="h1_check.space_after" type="number" step="0.1" value="12.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <label><input data-check-key="h1_check.keep_with_next" type="checkbox" checked> Не отрывать от следующего</label>
+                            <label><input data-check-key="h1_check.page_break_before" type="checkbox" checked> Разрыв страницы перед</label>
+                        </div>
+                    </div>
+
+                    <div>
+                        <h4 class="font-semibold mb-4 text-lg">Заголовок 2</h4>
+                        <div class="field-grid">
+                            <div><label>Шрифт</label><input data-check-key="h2_check.font_name" type="text" value="Times New Roman" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <div><label>Размер</label><input data-check-key="h2_check.font_size" type="number" step="0.1" value="14.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <label><input data-check-key="h2_check.font_bald" type="checkbox" checked> Жирный</label>
+                            <div><label>Отступ перед (pt)</label><input data-check-key="h2_check.space_before" type="number" step="0.1" value="12.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <div><label>Отступ после (pt)</label><input data-check-key="h2_check.space_after" type="number" step="0.1" value="6.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <h4 class="font-semibold mb-4 text-lg">Заголовок 3+</h4>
+                        <div class="field-grid">
+                            <div><label>Шрифт</label><input data-check-key="h3_check.font_name" type="text" value="Times New Roman" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <div><label>Размер</label><input data-check-key="h3_check.font_size" type="number" step="0.1" value="13.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <label><input data-check-key="h3_check.font_bald" type="checkbox" checked> Жирный</label>
+                            <div><label>Отступ перед (pt)</label><input data-check-key="h3_check.space_before" type="number" step="0.1" value="8.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <div><label>Отступ после (pt)</label><input data-check-key="h3_check.space_after" type="number" step="0.1" value="4.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        </div>
+                    </div>
+                </div>
+            </details>
+
+            <!-- ==================== Списки ==================== -->
+            <details>
+                <summary class="px-6 py-5 text-lg font-medium bg-gray-50 rounded-3xl">Списки (маркированный)</summary>
+                <div class="px-6 pb-8 pt-4">
+                    <div class="subheader">Общие параметры списков</div>
+                    <div class="field-grid">
+                        <div><label>Шрифт</label><input data-check-key="bullet_list_check.font_name" type="text" value="Times New Roman" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        <div><label>Размер шрифта</label><input data-check-key="bullet_list_check.font_size" type="number" step="0.1" value="13.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                    </div>
+                    <div class="checkbox-grid">
+                        <label><input data-check-key="bullet_list_check.font_bald" type="checkbox"> Жирный</label>
+                        <label><input data-check-key="bullet_list_check.font_italic" type="checkbox"> Курсив</label>
+                    </div>
+
+                    <div class="subheader">Отступы списков</div>
+                    <div class="field-grid">
+                        <div><label>Базовый отступ слева (см)</label><input data-check-key="bullet_list_check.left_indent_base" type="number" step="0.01" value="1.25" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        <div><label>Множитель уровня</label><input data-check-key="bullet_list_check.left_indent_mod" type="number" step="0.01" value="0.75" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        <div><label>Отступ первой строки (см)</label><input data-check-key="bullet_list_check.first_line_indent" type="number" step="0.01" value="-0.75" class="w-full px-4 py-3 border rounded-2xl"></div>
+                    </div>
+                </div>
+            </details>
+
+            <details>
+                <summary class="px-6 py-5 text-lg font-medium bg-gray-50 rounded-3xl">Списки (нумерованный)</summary>
+                <div class="px-6 pb-8 pt-4">
+                    <div class="subheader">Общие параметры списков</div>
+                    <div class="field-grid">
+                        <div><label>Шрифт</label><input data-check-key="numbered_list_check.font_name" type="text" value="Times New Roman" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        <div><label>Размер шрифта</label><input data-check-key="numbered_list_check.font_size" type="number" step="0.1" value="13.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                    </div>
+                    <div class="checkbox-grid">
+                        <label><input data-check-key="numbered_list_check.font_bald" type="checkbox"> Жирный</label>
+                        <label><input data-check-key="numbered_list_check.font_italic" type="checkbox"> Курсив</label>
+                    </div>
+
+                    <div class="subheader">Отступы списков</div>
+                    <div class="field-grid">
+                        <div><label>Базовый отступ слева (см)</label><input data-check-key="numbered_list_check.left_indent_base" type="number" step="0.01" value="1.25" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        <div><label>Множитель уровня</label><input data-check-key="numbered_list_check.left_indent_mod" type="number" step="0.01" value="0.75" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        <div><label>Отступ первой строки (см)</label><input data-check-key="numbered_list_check.first_line_indent" type="number" step="0.01" value="-0.75" class="w-full px-4 py-3 border rounded-2xl"></div>
+                    </div>
+                </div>
+            </details>
+
+            <!-- ==================== ТАБЛИЦЫ ==================== -->
+            <details>
+                <summary class="px-6 py-5 text-lg font-medium bg-gray-50 rounded-3xl">
+                    Таблицы
+                </summary>
+                <div class="px-6 pb-8 pt-4 space-y-12">
+
+                    <!-- Название таблицы -->
+                    <div>
+                        <h4 class="font-semibold text-lg mb-4 flex items-center gap-2">
+                            Название таблицы
+                        </h4>
+                        <div class="field-grid">
+                            <div>
+                                <label class="block text-xs font-medium mb-1">Формат названия (regex)</label>
+                                <input data-check-key="table_name_check.format_regex" type="text" value="Таблица <N> - <Название>." 
+                                       class="w-full px-4 py-3 border rounded-2xl font-mono text-sm">
+                            </div>
+                            <div><label class="block text-xs font-medium mb-1">Шрифт</label><input data-check-key="table_name_check.font_name" type="text" value="Times New Roman" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <div><label class="block text-xs font-medium mb-1">Размер шрифта</label><input data-check-key="table_name_check.font_size" type="number" step="0.1" value="13.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <div><label class="block text-xs font-medium mb-1">Выравнивание</label>
+                                <select data-check-key="table_name_check.alignment" class="w-full px-4 py-3 border rounded-2xl">
+                                    <option value="0">По левому краю (0)</option>
+                                    <option value="1">По центру (1)</option>
+                                    <option value="3">По ширине (3)</option>
+                                </select>
+                            </div>
+                            <div><label class="block text-xs font-medium mb-1">Отступ перед (pt)</label><input data-check-key="table_name_check.space_before" type="number" step="0.1" value="13.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <div><label class="block text-xs font-medium mb-1">Отступ после (pt)</label><input data-check-key="table_name_check.space_after" type="number" step="0.1" value="0.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <label class="flex items-center gap-2"><input data-check-key="table_name_check.keep_with_next" type="checkbox" checked> Не отрывать от следующего</label>
+                        </div>
+                    </div>
+
+                    <!-- Заголовки таблицы -->
+                    <div>
+                        <h4 class="font-semibold text-lg mb-4 flex items-center gap-2">
+                            Заголовки таблицы
+                        </h4>
+                        <div class="field-grid">
+                            <div><label class="block text-xs font-medium mb-1">Шрифт</label><input data-check-key="table_heading_check.font_name" type="text" value="Times New Roman" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <div><label class="block text-xs font-medium mb-1">Размер шрифта</label><input data-check-key="table_heading_check.font_size" type="number" step="0.1" value="11.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <label class="flex items-center gap-2"><input data-check-key="table_heading_check.font_bald" type="checkbox" checked> Жирный</label>
+                            <div><label class="block text-xs font-medium mb-1">Выравнивание</label>
+                                <select data-check-key="table_heading_check.alignment" class="w-full px-4 py-3 border rounded-2xl">
+                                    <option value="1">По центру (1)</option>
+                                    <option value="0">По левому краю (0)</option>
+                                </select>
+                            </div>
+                            <div><label class="block text-xs font-medium mb-1">Вертикальное выравнивание</label>
+                                <select data-check-key="table_heading_check.vert_alignment" class="w-full px-4 py-3 border rounded-2xl">
+                                    <option value="1">По центру</option>
+                                    <option value="0">По верху</option>
+                                </select>
+                            </div>
+                            <div><label class="block text-xs font-medium mb-1">Междустрочный интервал</label><input data-check-key="table_heading_check.line_spacing" type="number" step="0.1" value="1.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        </div>
+                    </div>
+
+                    <!-- Текст внутри таблицы -->
+                    <div>
+                        <h4 class="font-semibold text-lg mb-4 flex items-center gap-2">
+                            Текст в таблице
+                        </h4>
+                        <div class="field-grid">
+                            <div><label class="block text-xs font-medium mb-1">Шрифт</label><input data-check-key="table_text_check.font_name" type="text" value="Times New Roman" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <div><label class="block text-xs font-medium mb-1">Размер шрифта</label><input data-check-key="table_text_check.font_size" type="number" step="0.1" value="11.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <label class="flex items-center gap-2"><input data-check-key="table_text_check.font_bald" type="checkbox"> Жирный</label>
+                            <div><label class="block text-xs font-medium mb-1">Выравнивание</label>
+                                <select data-check-key="table_text_check.alignment" class="w-full px-4 py-3 border rounded-2xl">
+                                    <option value="0">По левому краю (0)</option>
+                                    <option value="1">По центру (1)</option>
+                                    <option value="3">По ширине (3)</option>
+                                </select>
+                            </div>
+                            <div><label class="block text-xs font-medium mb-1">Вертикальное выравнивание</label>
+                                <select data-check-key="table_text_check.vert_alignment" class="w-full px-4 py-3 border rounded-2xl">
+                                    <option value="1">По центру</option>
+                                    <option value="0">По верху</option>
+                                </select>
+                            </div>
+                            <div><label class="block text-xs font-medium mb-1">Междустрочный интервал</label><input data-check-key="table_text_check.line_spacing" type="number" step="0.1" value="1.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        </div>
+                    </div>
+
+                    <!-- Абзац после таблицы -->
+                    <div>
+                        <h4 class="font-semibold text-lg mb-4 flex items-center gap-2">
+                            Абзац после таблицы
+                        </h4>
+                        <div class="field-grid">
+                            <div><label class="block text-xs font-medium mb-1">Шрифт</label><input data-check-key="text_after_table_check.font_name" type="text" value="Times New Roman" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <div><label class="block text-xs font-medium mb-1">Размер шрифта</label><input data-check-key="text_after_table_check.font_size" type="number" step="0.1" value="13.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <label class="flex items-center gap-2"><input data-check-key="text_after_table_check.font_bald" type="checkbox"> Жирный</label>
+                            <div><label class="block text-xs font-medium mb-1">Выравнивание</label>
+                                <select data-check-key="text_after_table_check.alignment" class="w-full px-4 py-3 border rounded-2xl">
+                                    <option value="3">По ширине (3)</option>
+                                </select>
+                            </div>
+                            <div><label class="block text-xs font-medium mb-1">Отступ перед (pt)</label><input data-check-key="text_after_table_check.space_before" type="number" step="0.1" value="13.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <div><label class="block text-xs font-medium mb-1">Отступ первой строки (см)</label><input data-check-key="text_after_table_check.first_line_indent" type="number" step="0.01" value="1.25" class="w-full px-4 py-3 border rounded-2xl"></div>
+                            <div><label class="block text-xs font-medium mb-1">Междустрочный интервал</label><input data-check-key="text_after_table_check.line_spacing" type="number" step="0.1" value="1.5" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        </div>
+                    </div>
+
+                </div>
+            </details>
+
+            <!-- ==================== Изображения ==================== -->
+            <details>
+                <summary class="px-6 py-5 text-lg font-medium bg-gray-50 rounded-3xl">Изображения и подписи</summary>
+                <div class="px-6 pb-8 pt-4">
+                    <div class="subheader">Изображение</div>
+                    <div class="field-grid">
+                        <div><label>Выравнивание</label><select data-check-key="image_check.alignment" class="w-full px-4 py-3 border rounded-2xl"><option value="1">По центру</option></select></div>
+                        <div><label>Отступ перед (pt)</label><input data-check-key="image_check.space_before" type="number" step="0.1" value="6.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                        <div><label>Отступ после (pt)</label><input data-check-key="image_check.space_after" type="number" step="0.1" value="0.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                    </div>
+                    <label><input data-check-key="image_check.keep_with_next" type="checkbox" checked> Не отрывать от следующего</label>
+                </div>
+            </details>
+
+            <!-- ==================== Поля документа ==================== -->
+            <details>
+                <summary class="px-6 py-5 text-lg font-medium bg-gray-50 rounded-3xl">Поля страницы</summary>
+                <div class="px-6 pb-8 pt-4 field-grid">
+                    <div><label>Верхнее поле (см)</label><input data-check-key="page_check.top_margin" type="number" step="0.1" value="2.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                    <div><label>Нижнее поле (см)</label><input data-check-key="page_check.bottom_margin" type="number" step="0.1" value="2.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                    <div><label>Левое поле (см)</label><input data-check-key="page_check.left_margin" type="number" step="0.1" value="3.0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                    <div><label>Правое поле (см)</label><input data-check-key="page_check.right_margin" type="number" step="0.1" value="1.5" class="w-full px-4 py-3 border rounded-2xl"></div>
+                    <div><label>Ориентация (0 = портрет)</label><input data-check-key="page_check.orientation" type="number" value="0" class="w-full px-4 py-3 border rounded-2xl"></div>
+                </div>
+            </details>
+
+            <!-- ==================== Дополнительные флаги ==================== -->
+            <details>
+                <summary class="px-6 py-5 text-lg font-medium bg-gray-50 rounded-3xl">Дополнительные настройки</summary>
+                <div class="px-6 pb-8 pt-4 checkbox-grid">
+                    <label><input data-check-key="enable_optional_settings.table_headings_top" type="checkbox" checked> Проверять заголовки таблицы сверху</label>
+                    <label><input data-check-key="enable_optional_settings.table_headings_left" type="checkbox"> Проверять заголовки таблицы слева</label>
+                    <label><input data-check-key="enable_optional_settings.table_title" type="checkbox" checked> Проверять название таблицы</label>
+                    <label><input data-check-key="enable_optional_settings.paragraph_after_table" type="checkbox" checked> Проверять абзац после таблицы</label>
+                    <label><input data-check-key="enable_optional_settings.enable_pic_title" type="checkbox" checked> Проверять подпись к рисунку</label>
+                </div>
+            </details>
+        </div>
+
+        <!-- Предпросмотр JSON -->
+        <div class="mt-12">
+            <label class="block text-sm font-medium mb-2">JSON критериев</label>
+            <textarea id="criteriaPreview" rows="14" class="w-full font-mono text-sm p-6 border border-gray-300 rounded-3xl bg-gray-900 text-emerald-300" readonly></textarea>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    const API_URL = "http://127.0.0.1:8000/check-docx-batch";
+
+    let selectedFiles = [];
+
+    const FULL_DEFAULTS = {
+        text_check: { font_name: "Times New Roman", font_size: 13.0, font_bald: false, font_italic: false, font_underline: false, font_color: false, font_back_color: false, alignment: 3, keep_with_next: false, page_break_before: false, space_before: 0.0, space_after: 0.0, left_indent: 0, right_indent: 0, first_line_indent: 1.25, line_spacing: 1.5 },
+        h1_check: { font_name: "Times New Roman", font_size: 16.0, font_bald: true, font_italic: false, font_underline: false, font_color: false, font_back_color: false, alignment: 1, keep_with_next: true, page_break_before: true, space_before: 0.0, space_after: 12.0, left_indent: 0, right_indent: 0, first_line_indent: 0.0, line_spacing: 1.5 },
+        h2_check: { font_name: "Times New Roman", font_size: 14.0, font_bald: true, font_italic: false, font_underline: false, font_color: false, font_back_color: false, alignment: 1, keep_with_next: true, page_break_before: false, space_before: 12.0, space_after: 6.0, left_indent: 0, right_indent: 0, first_line_indent: 0.0, line_spacing: 1.5 },
+        h3_check: { font_name: "Times New Roman", font_size: 13.0, font_bald: true, font_italic: false, font_underline: false, font_color: false, font_back_color: false, alignment: 1, keep_with_next: true, page_break_before: false, space_before: 8.0, space_after: 4.0, left_indent: 0, right_indent: 0, first_line_indent: 0.0, line_spacing: 1.5 },
+        bullet_list_check: { font_name: "Times New Roman", font_size: 13.0, font_bald: false, font_italic: false, font_underline: false, font_color: false, font_back_color: false, alignment: 3, keep_with_next: false, page_break_before: false, space_before: 0.0, space_after: 0.0, left_indent: 1.25, right_indent: 0, first_line_indent: -0.75, line_spacing: 1.5, left_indent_base: 1.25, left_indent_mod: 0.75 },
+        numbered_list_check: { font_name: "Times New Roman", font_size: 13.0, font_bald: false, font_italic: false, font_underline: false, font_color: false, font_back_color: false, alignment: 3, keep_with_next: false, page_break_before: false, space_before: 0.0, space_after: 0.0, left_indent: 1.25, right_indent: 0, first_line_indent: -0.75, line_spacing: 1.5, left_indent_base: 1.25, left_indent_mod: 0.75 },
+        table_name_check: { format_regex: "Таблица <N> - <Название>.", font_name: "Times New Roman", font_size: 13.0, font_color: false, font_back_color: false, alignment: 0, keep_with_next: true, page_break_before: false, space_before: 13.0, space_after: 0.0, left_indent: 0, right_indent: 0, first_line_indent: 0.0, line_spacing: 1.0 },
+        table_heading_check: { font_name: "Times New Roman", font_size: 11.0, font_bald: true, font_italic: false, font_underline: false, font_color: false, font_back_color: false, alignment: 1, vert_alignment: 1, keep_with_next: false, page_break_before: false, space_before: 0.0, space_after: 0.0, left_indent: 0, right_indent: 0, first_line_indent: 0.0, line_spacing: 1.0 },
+        table_text_check: { font_name: "Times New Roman", font_size: 11.0, font_bald: false, font_italic: false, font_underline: false, font_color: false, font_back_color: false, alignment: 0, vert_alignment: 1, keep_with_next: false, page_break_before: false, space_before: 0.0, space_after: 0.0, left_indent: 0, right_indent: 0, first_line_indent: 0.0, line_spacing: 1.0 },
+        text_after_table_check: { font_name: "Times New Roman", font_size: 13.0, font_bald: false, font_italic: false, font_underline: false, font_color: false, font_back_color: false, alignment: 3, keep_with_next: false, page_break_before: false, space_before: 13.0, space_after: 0.0, left_indent: 0, right_indent: 0, first_line_indent: 1.25, line_spacing: 1.5 },
+        image_check: { alignment: 1, keep_with_next: true, space_before: 6.0, space_after: 0.0, first_line_indent: 0, line_spacing: 1 },
+        image_name_check: { format_regex: "Рисунок <N> - <Название>.", font_name: "Times New Roman", font_size: 11.0, font_bald: true, font_italic: true, font_color: false, font_back_color: false, alignment: 1, keep_with_next: false, page_break_before: false, space_before: 0.0, space_after: 6.0, left_indent: 0, right_indent: 0, first_line_indent: 0, line_spacing: 1 },
+        text_before_list_check: { font_name: "Times New Roman", font_size: 13.0, font_bald: false, font_italic: false, font_underline: false, font_color: false, font_back_color: false, alignment: 3, keep_with_next: true, page_break_before: false, space_before: 0.0, space_after: 0.0, left_indent: 0, right_indent: 0, first_line_indent: 1.25, line_spacing: 1.5 },
+        page_check: { top_margin: 2.0, bottom_margin: 2.0, left_margin: 3.0, right_margin: 1.5, orientation: 0 },
+        enable_optional_settings: { table_headings_top: true, table_headings_left: false, table_title: true, paragraph_after_table: true, enable_pic_title: true }
+    };
+
+    function triggerFileInput() { document.getElementById("fileInput").click(); }
+
+    document.getElementById("fileInput").addEventListener("change", e => {
+        selectedFiles = Array.from(e.target.files);
+        renderSelectedFiles();
+    });
+
+    function renderSelectedFiles() {
+        const container = document.getElementById("selectedFiles");
+        const list = document.getElementById("fileList");
+        list.innerHTML = "";
+        if (selectedFiles.length === 0) { container.classList.add("hidden"); return; }
+        container.classList.remove("hidden");
+        selectedFiles.forEach((file, i) => {
+            const li = document.createElement("li");
+            li.className = "flex justify-between items-center bg-gray-50 px-6 py-4 rounded-2xl";
+            li.innerHTML = `<span class="font-medium">${file.name}</span><button onclick="removeFile(${i})" class="text-red-500 hover:text-red-700"><i class="fa-solid fa-trash"></i></button>`;
+            list.appendChild(li);
+        });
+    }
+
+    function removeFile(i) {
+        selectedFiles.splice(i, 1);
+        renderSelectedFiles();
+    }
+
+    function resetAllToDefaults() {
+        Object.keys(FULL_DEFAULTS).forEach(group => {
+            Object.keys(FULL_DEFAULTS[group]).forEach(field => {
+                const key = `${group}.${field}`;
+                const el = document.querySelector(`[data-check-key="${key}"]`);
+                if (!el) return;
+                const val = FULL_DEFAULTS[group][field];
+                if (el.type === "checkbox") el.checked = !!val;
+                else el.value = val;
+            });
+        });
+        updatePreview();
+    }
+
+    function buildCriteria() {
+        const criteria = {};
+        document.querySelectorAll('[data-check-key]').forEach(el => {
+            const [group, field] = el.getAttribute('data-check-key').split('.');
+            if (!criteria[group]) criteria[group] = {};
+            
+            let val;
+            
+            if (el.type === "checkbox") {
+                val = el.checked;
+            }
+            else if (el.type === "number") {
+                val = parseFloat(el.value);
+                if (isNaN(val)) val = 0;
+            }
+            else {
+                val = el.value;
+                if (val !== "False" && val !== "True" && !isNaN(val) && val.trim() !== "") {
+                    const numVal = parseFloat(val);
+                    if (!isNaN(numVal) && val.trim() === numVal.toString()) {
+                        val = numVal;
+                    }
+                }
+                if (val === "true") val = true;
+                if (val === "false") val = false;
+            }
+            
+            criteria[group][field] = val;
+        });
+        return criteria;
+    }
+
+    function updatePreview() {
+        document.getElementById("criteriaPreview").value = JSON.stringify(buildCriteria(), null, 2);
+    }
+
+    document.addEventListener('change', e => { if (e.target.hasAttribute('data-check-key')) updatePreview(); });
+    document.addEventListener('input', e => { if (e.target.hasAttribute('data-check-key')) updatePreview(); });
+
+    async function startCheck() {
+        if (selectedFiles.length === 0) return alert("Выберите хотя бы один файл!");
+
+        const btn = document.getElementById("checkButton");
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Выполняется проверка...`;
+
+        const formData = new FormData();
+        selectedFiles.forEach(file => formData.append("files", file));
+        formData.append("criteria", JSON.stringify(buildCriteria()));
+
+        try {
+            const res = await fetch(API_URL, { method: "POST", body: formData });
+            if (!res.ok) throw new Error("Ошибка сервера");
+            const data = await res.json();
+            showResults(data);
+        } catch (err) {
+            alert("Ошибка: " + err.message + "\nУбедитесь, что сервер запущен на http://127.0.0.1:8000");
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = `<i class="fa-solid fa-check-circle text-3xl"></i><span>Проверить все выбранные документы</span>`;
+        }
+    }
+
+    function showResults(data) {
+        document.getElementById("resultsSection").classList.remove("hidden");
+        const tbody = document.getElementById("resultsBody");
+        tbody.innerHTML = "";
+        let totalErrors = 0;
+
+        data.results.forEach(item => {
+            totalErrors += item.comment_count;
+            const tr = document.createElement("tr");
+            tr.className = "result-row";
+            tr.innerHTML = `
+                <td class="py-5 font-medium">${item.original_filename}</td>
+                <td class="py-5 text-center">
+                    <span class="px-6 py-1 rounded-3xl font-bold ${item.comment_count === 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}">${item.comment_count}</span>
+                </td>
+                <td class="py-5 text-right">
+                    <a href="http://127.0.0.1:8000${item.download_url}" target="_blank" 
+                       class="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-3xl text-sm">
+                        <i class="fa-solid fa-download"></i> Скачать проверенный файл
+                    </a>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+
+        document.getElementById("totalStats").innerHTML = `
+            Обработано документов: <strong>${data.total_documents}</strong><br>
+            Всего найдено ошибок: <strong class="text-red-600">${totalErrors}</strong>
+        `;
+    }
+
+    // Инициализация
+    window.onload = () => {
+        resetAllToDefaults();
+        updatePreview();
+    };
+</script>
+</body>
+</html>

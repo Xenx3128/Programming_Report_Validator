@@ -1,0 +1,39 @@
+{
+    "text_check": {
+        "font_name": "Times New Roman",
+        "font_size": 13.0,
+        "font_bald": false,
+        "font_italic": false,
+        "font_underline": false,
+        "font_color": false,
+        "font_back_color": false,
+        "alignment": 3,
+        "keep_with_next": false,
+        "page_break_before": false,
+        "space_before": 0.0,
+        "space_after": 0.0,
+        "left_indent": 0,
+        "right_indent": 0,
+        "first_line_indent": 1.25,
+        "line_spacing": 1.5
+    },
+    "h1_check": {
+        "font_name": "Times New Roman",
+        "font_size": 16.0,
+        "font_bald": true,
+        "font_italic": false,
+        "font_underline": false,
+        "font_color": false,
+        "font_back_color": false,
+        "alignment": 1,
+        "keep_with_next": true,
+        "page_break_before": true,
+        "space_before": 0.0,
+        "space_after": 12.0,
+        "left_indent": 0,
+        "right_indent": 0,
+        "first_line_indent": 0.0,
+        "line_spacing": 1.5,
+        "is_list": true
+    }
+}
