@@ -81,19 +81,7 @@ class ListChecklist(ParagraphChecklist):
         super().__init__()
         self.left_indent_base = None
         self.left_indent_mod = None
-        self.list_reminder = (
-            "Списку предшествует абзац текста с флагом \"не отрывать от следующего\"\n",
-            "Нумерованный список:\n",
-            "   Элемент списка начинается с заглавной буквы\n",
-            "   Элемент списка заканчивается точкой\n",
-            "   В качестве номера используется арабская цифра\n",
-            "Маркированный список:\n",
-            "   Элемент списка начинается с заглавной буквы\n",
-            "   Элемент списка заканчивается точкой с запятой\n",
-            "   В качестве маркера используется тире\n",
-            "Выступ первой строки 0.75 см\n",
-            "Отступ вычисляется по формуле: 1.25+0.75*(Уровень_элемента - 1)\n",
-        )
+
 
 
 class TableParagraphChecklist(ParagraphChecklist):
@@ -149,8 +137,7 @@ class DocumentParser:
             "table_headings_left": False,
             "table_title": True,
             "paragraph_after_table": True,
-            "enable_pic_title": True,
-            "list_reminder": True,
+            "enable_pic_title": True
         }
 
         
@@ -309,33 +296,29 @@ class DocumentParser:
                 num_id = int(numId_el.get(qn('w:val'))) if numId_el is not None else None
                 return ilvl, num_id
 
-            # ─── 1. Прямое форматирование параграфа ───
+            # Прямое форматирование параграфа
             pPr_direct = paragraph._element.find(qn('w:pPr'))
             ilvl, num_id = extract_numPr_from_pPr(pPr_direct)
             if num_id:
-                # нашли — используем это как самое приоритетное
                 pass
             else:
-                # ─── 2. Ищем в цепочке стилей ───
+                # Цепочка стилей
                 style = paragraph.style
                 visited = set()
                 while style and style.name not in visited:
                     visited.add(style.name)
                     try:
-                        # paragraph_format — это высокоуровневое, но numPr там нет
-                        # → идём в XML стиля
                         style_pPr = style._element.find(qn('w:pPr'))
                         ilvl, num_id = extract_numPr_from_pPr(style_pPr)
                         if num_id is not None:
-                            break  # нашли — выходим из цикла
+                            break
                     except AttributeError:
                         pass
                     style = style.base_style
 
             if not num_id:
-                return props  # нумерации нигде нет
+                return props
 
-            # ─── Дальше — общий код парсинга numbering.xml ───
             try:
                 numbering_part = document.part.numbering_part
                 if not numbering_part or not numbering_part._element:
@@ -343,13 +326,13 @@ class DocumentParser:
 
                 num_el = numbering_part._element
 
-                # 1. lvlOverride (приоритетнее abstract)
+                # lvlOverride (приоритетнее abstract)
                 lvl_nodes = num_el.xpath(
                     f'.//w:num[@w:numId="{num_id}"]/w:lvlOverride[@w:ilvl="{ilvl}"]/w:lvl'
                 )
 
                 if not lvl_nodes:
-                    # 2. abstractNum
+                    # abstractNum
                     abstract_refs = num_el.xpath(
                         f'.//w:num[@w:numId="{num_id}"]/w:abstractNumId'
                     )
@@ -368,20 +351,18 @@ class DocumentParser:
 
                 lvl = lvl_nodes[0]
 
-                # ─── ДОБАВЛЕНО (минимально, сразу после lvl): формат нумерации + тип списка ───
                 numFmt_el = lvl.find(qn('w:numFmt'))
                 if numFmt_el is not None:
                     val = numFmt_el.get(qn('w:val'))
                     if val:
                         props['numbering_format'] = val
                         props['list_type'] = 'bulleted' if val == 'bullet' else 'numbered'
-                # ───────────────────────────────────────────────────────────────────────────────
 
                 lvl_pPr = lvl.find(qn('w:pPr'))
                 if lvl_pPr is None:
                     return props
 
-                # ─── indents ───
+                # indents
                 ind = lvl_pPr.find(qn('w:ind'))
                 if ind is not None:
                     for side in ['left', 'start', 'right', 'end']:
@@ -396,7 +377,7 @@ class DocumentParser:
                     elif first_line is not None:
                         props['first_line_indent'] = Length(twips_to_emu(int(first_line)))
 
-                # ─── alignment ───
+                # alignment
                 jc = lvl_pPr.find(qn('w:jc'))
                 if jc is not None:
                     val = jc.get(qn('w:val'))
@@ -406,7 +387,7 @@ class DocumentParser:
                         except AttributeError:
                             pass
 
-                # ─── spacing ───
+                # spacing
                 spacing = lvl_pPr.find(qn('w:spacing'))
                 if spacing is not None:
                     for attr in ['before', 'after']:
@@ -418,7 +399,7 @@ class DocumentParser:
                     if line is not None:
                         props['line_spacing_raw'] = (int(line), line_rule)
 
-                # flags (keepNext и т.п.)
+                # flags
                 for flag_name, prop_key in [('keepNext', 'keep_with_next'), ('pageBreakBefore', 'page_break_before')]:
                     flag_el = lvl_pPr.find(qn(f'w:{flag_name}'))
                     if flag_el is not None:
@@ -426,13 +407,13 @@ class DocumentParser:
                         props[prop_key] = val in (None, '1', 'true', 'on')
 
             except Exception:
-                pass  # silent fail — лучше логировать в продакшене
+                pass
 
             return props
 
         def resolve_para_prop(prop_name, default=None):
 
-            # ─── 1. Прямое ───
+            # Прямое
             try:
                 fmt = paragraph.paragraph_format
                 value = getattr(fmt, prop_name, None)
@@ -441,7 +422,7 @@ class DocumentParser:
             except Exception:
                 pass
 
-            # ─── 2. Numbering (direct ИЛИ из стиля) ───
+            # Numbering
             numbering_props = get_numbering_properties(paragraph, document)
             if prop_name in numbering_props:
                 return numbering_props[prop_name]
@@ -454,7 +435,7 @@ class DocumentParser:
                     return Length(raw).pt
                 return raw / 240.0
 
-            # ─── 3. Свойства стиля (paragraph_format) ───
+            # Свойства стиля
             style = paragraph.style
             visited = set()
             while style and style.name not in visited:
@@ -469,18 +450,15 @@ class DocumentParser:
 
             return default
 
-        # ====================== РАЗРЕШЕНИЕ СВОЙСТВ ======================
         
         is_list = self.is_list_item(paragraph)
         
         if is_list[0]:
             pass
         
-        # ─── ДОБАВЛЕНО (минимально): получаем расширенные свойства списка ───
         numbering_props = get_numbering_properties(paragraph, document)
         list_type = numbering_props.get('list_type')
         numbering_format = numbering_props.get('numbering_format')
-        # ────────────────────────────────────────────────────────────────────
 
         alignment = resolve_para_prop("alignment", WD_PARAGRAPH_ALIGNMENT.LEFT)
         keep_with_next = bool(resolve_para_prop("keep_with_next"))
@@ -490,7 +468,6 @@ class DocumentParser:
         right_l  = resolve_para_prop("right_indent")
         first_l  = resolve_para_prop("first_line_indent")
 
-        # Преобразуем в см только если значение есть, иначе 0
         left_indent     = round(left_l.cm, 2)   if left_l  is not None else 0.0
         right_indent    = round(right_l.cm, 2)  if right_l is not None else 0.0
         first_line_indent = round(first_l.cm, 2) if first_l is not None else 0.0
@@ -508,9 +485,9 @@ class DocumentParser:
         
         if line_raw is None:
             line_spacing = 1.0
-        elif hasattr(line_raw, 'pt'):           # это Length (из стиля или direct)
-            line_spacing = round(line_raw.pt / 12, 2)   # pt → lines (при single=12pt)
-        else:                                   # числовое значение в линиях (из numbering auto)
+        elif hasattr(line_raw, 'pt'):
+            line_spacing = round(line_raw.pt / 12, 2)
+        else:
             line_spacing = round(float(line_raw), 2)
 
 
@@ -530,8 +507,8 @@ class DocumentParser:
             "is_list": is_list[0],
             'list_level': is_list[1],
             
-            "list_type": list_type,               # 'numbered' / 'bulleted' (или None)
-            "numbering_format": numbering_format  # формат нумерации из Word (bullet / decimal / upperRoman / ...)
+            "list_type": list_type,
+            "numbering_format": numbering_format
         }
  
     def get_run_properties(self, document, paragraph, run):
@@ -669,7 +646,7 @@ class DocumentParser:
                 value = get_style_chain_prop(paragraph.style, prop_name)
                 if value is not None and (prop_name != "name" or value):
                     return value
-            # docDefaults (только name)
+
             if self._doc_defaults is None:
                 try:
                     self._doc_defaults = document.styles.element.xpath(
@@ -706,8 +683,6 @@ class DocumentParser:
         font_small_caps = bool(resolve_run_prop("small_caps"))
         font_all_caps = bool(resolve_run_prop("all_caps"))
 
-        # paragraph_properties = self.get_paragraph_properties(document, paragraph)
-
         result = {
             "font_name": font_name,
             "font_size": font_size,
@@ -722,9 +697,6 @@ class DocumentParser:
             "font_small_caps": font_small_caps,
             "font_all_caps": font_all_caps,
         }
-        
-        # if isinstance(paragraph_properties, dict):
-        #    result.update(paragraph_properties)
             
         return result
 
@@ -797,12 +769,10 @@ class DocumentParser:
                     pass
             return None
 
-        # Быстрый путь
         level = extract_level_from_style(paragraph.style)
         if level is not None:
             return level
 
-        # Цепочка наследования стилей (самый частый крайний случай!)
         current = paragraph.style
         depth = 0
         while current and depth < 20:
@@ -812,7 +782,7 @@ class DocumentParser:
             current = current.base_style
             depth += 1
 
-        # outlineLvl (используется в некоторых шаблонах и экспортах из Google Docs)
+
         outline = paragraph._p.xpath('./w:pPr/w:outlineLvl/@w:val')
         if outline:
             try:
@@ -832,7 +802,6 @@ class DocumentParser:
         p = paragraph._p
         pPr = p.pPr
 
-        # 1. Прямая нумерация в самом параграфе (самый надёжный случай)
         if pPr is not None and pPr.numPr is not None:
             ilvl_nodes = p.xpath('.//w:ilvl/@w:val')
             if ilvl_nodes:
@@ -841,9 +810,8 @@ class DocumentParser:
                     return True, level
                 except (ValueError, IndexError):
                     pass
-            return True, 1  # ilvl нет → считаем первым уровнем
+            return True, 1
 
-        # 2. Ищем в стиле и цепочке базовых стилей
         style = paragraph.style
         depth = 0
 
@@ -885,7 +853,7 @@ class DocumentParser:
         return 'pic:pic' in xml
 
     def collect_paragraph_errors(self, paragraph, checklist, document):
-        """Проверяет КАЖДЫЙ run в параграфе и собирает ВСЕ ошибки.
+        """Проверяет каждый run в параграфе и собирает ВСЕ ошибки.
         Возвращает список ошибок для одного общего комментария (дубликаты по параметру удаляются)."""
         if not isinstance(paragraph, Paragraph) or not paragraph.runs:
             return []
@@ -896,7 +864,6 @@ class DocumentParser:
         paragraph_stats = self.get_paragraph_properties(document, paragraph)
 
         for run in paragraph.runs:
-            # Пропускаем пустые run-ы (часто бывают пробелы/табуляция)
             if not run.text or not run.text.strip():
                 continue
 
@@ -944,7 +911,6 @@ class DocumentParser:
 
         return "text", None
 
-    # =========================================================================
     
     def parse_document(self, filename):
         document = Document(filename)
@@ -952,13 +918,13 @@ class DocumentParser:
         comment_count = 0
 
         # Состояния
-        image_name_check = 0                  # счётчик для подписи рисунка (2 блока после изображения)
-        text_after_table_check = 0            # счётчик для абзаца после таблицы
+        image_name_check = 0
+        text_after_table_check = 0
         first_paragraph_not_reached = True
 
         # Контекст предыдущего блока
         prev_block_type = None
-        prev_paragraph = None                 # нужен для названия таблицы
+        prev_paragraph = None
 
         current_paragraph = None
         current_errors = []
@@ -983,7 +949,7 @@ class DocumentParser:
                         comment_count += 1
                         written_comments.append([section_title, errors])
 
-            # ── ПАРАГРАФ ────────────────────────────────────────────────────────
+            # Параграф
             if isinstance(block, Paragraph):
                 p = block
                 target_paragraph = p
@@ -1047,7 +1013,7 @@ class DocumentParser:
                 if not target_runs:
                     target_runs = p.runs
 
-            # ── ТАБЛИЦА ─────────────────────────────────────────────────────────
+            # Таблица
             elif isinstance(block, Table):
                 
                 
