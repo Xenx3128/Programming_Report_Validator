@@ -523,7 +523,6 @@ class DocumentParser:
 
 
         def get_theme_font(font_type='minor'):
-            """(ваша версия без изменений)"""
             if self._theme_cache is None:
                 self._theme_cache = {'minor': {}, 'major': {}}
                 try:
@@ -555,7 +554,6 @@ class DocumentParser:
             return self._theme_cache[font_type]
 
         def resolve_theme_name(name):
-            """(ваша исправленная версия)"""
             if not name:
                 return "Calibri"
             name = str(name).strip()
